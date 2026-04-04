@@ -1,0 +1,29 @@
+[project]
+name = "impact-team-2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Blake Moody", email = "32070003+blayyyyyk@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=4.8.4",
+    "evaluate>=0.4.6",
+    "torch>=2.11.0",
+    "transformers>=5.5.0",
+    # Install Metal/Apple Silicon support if on macOS
+    "mlx-vlm; sys_platform == 'darwin'",
+    # Install CUDA support if on Linux (assuming NVIDIA setup)
+    "mlx-vlm[cuda]; sys_platform == 'linux'",
+    # Install CPU-only if on Windows
+    "mlx-vlm[cpu]; sys_platform == 'win32'",
+    "torchmetrics>=1.9.0",
+]
+
+[project.scripts]
+impact-team-2 = "impact_team_2:main"
+
+[build-system]
+requires = ["uv_build>=0.10.7,<0.11.0"]
+build-backend = "uv_build"
