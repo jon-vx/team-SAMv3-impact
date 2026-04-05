@@ -1,7 +1,7 @@
 # local python dev artifacts
 **/__pycache__
 **/*.venv
-*.local
+**/*.local
 
 # tensorboard charting of training metrics
 runs/**/events.*
