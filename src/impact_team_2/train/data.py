@@ -17,6 +17,8 @@ def make_fake_box(mask: np.ndarray):
         box = np.array([x, y, x + w, y + h]) # xyxy format
     else:
         box = np.array([0, 0, mask.shape[1], mask.shape[0]])
+        
+    return box
 
 # sam3 wants bounding boxes as input so we need to couple our existing dataset with
 # corresponding, precomputed bounding boxes
