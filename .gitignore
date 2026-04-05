@@ -1,2 +1,19 @@
-.venv
-**/*/__pycache__
+# local python dev artifacts
+**/__pycache__
+**/*.venv
+*.local
+
+# tensorboard charting of training metrics
+runs/**/events.*
+runs/events.*
+
+# spleen datasets used for testing
+datasets/**/*.npz
+datasets/*.npz
+
+# jupyter notebook artifacts
+# TODO
+
+# model checkpoints used for testing
+checkpoints/**/*.safetensors
+checkpoints/*.safetensors
