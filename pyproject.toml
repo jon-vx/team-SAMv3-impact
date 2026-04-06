@@ -12,12 +12,6 @@ dependencies = [
     "evaluate>=0.4.6",
     "torch>=2.11.0",
     "transformers>=5.5.0",
-    # Install Metal/Apple Silicon support if on macOS
-    "mlx-vlm; sys_platform == 'darwin'",
-    # Install CUDA support if on Linux (assuming NVIDIA setup)
-    "mlx-vlm[cuda]; sys_platform == 'linux'",
-    # Install CPU-only if on Windows
-    "mlx-vlm[cpu]; sys_platform == 'win32'",
     "torchmetrics>=1.9.0",
     "dotenv>=0.9.9",
     "torchvision>=0.26.0",

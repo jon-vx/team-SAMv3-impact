@@ -3,7 +3,6 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 from impact_team_2.vendor.medsam3.lora_layers import LoRAConfig, apply_lora_to_model, load_lora_weights
 from sam3.model_builder import build_sam3_image_model
-from PIL import Image
 from PIL import Image as PILImage
 from sam3.train.data.sam3_image_dataset import Datapoint, Image as SAMImage, FindQueryLoaded, InferenceMetadata
 from sam3.train.data.collator import collate_fn_api
@@ -18,6 +17,7 @@ print("test")
 
 bpe_path = str(Path(sam3.__file__).parent / "assets" / "bpe_simple_vocab_16e6.txt.gz")
 lora_weights_path = snapshot_download(repo_id="lal-Joey/MedSAM3_v1")
+lora_weights_file = next(Path(lora_weights_path).glob("*.pt"))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -45,7 +45,7 @@ lora_config = LoRAConfig(
 
 model = apply_lora_to_model(model, lora_config)
 
-load_lora_weights(model, lora_weights_path)
+load_lora_weights(model, str(lora_weights_file))
 model.to(device)
 model.eval()
 print("Model ready")
