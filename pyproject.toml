@@ -16,10 +16,11 @@ dependencies = [
     "dotenv>=0.9.9",
     "torchvision>=0.26.0",
     "tensorboard>=2.20.0",
-    "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+    "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git",
     "einops",
     "pycocotools",
-    "psutil"
+    "psutil",
+    "scikit-learn"
 ]
 
 [project.scripts]

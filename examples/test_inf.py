@@ -1,16 +1,12 @@
 from impact_team_2.inference import predict
-import urllib.request
 from pathlib import Path
 import numpy as np
 from sklearn.model_selection import train_test_split
 
 DATASETS_DIR = Path(__file__).resolve().parent.parent / "datasets"
 
-images = np.load(DATASETS_DIR / "images.npz")
-masks = np.load(DATASETS_DIR / "masks.npz")
-
-images = np.load('images.npz')["images"]
-masks = np.load('masks.npz')["masks"] > 0
+images = np.load(DATASETS_DIR / "images.npz")["images"]
+masks = np.load(DATASETS_DIR / "masks.npz")["masks"] > 0
 
 images[:, 0:20, 25:275,] = [16,16,16]
 
