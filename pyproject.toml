@@ -13,14 +13,16 @@ dependencies = [
     "torch>=2.11.0",
     "transformers>=5.5.0",
     "torchmetrics>=1.9.0",
-    "dotenv>=0.9.9",
+    "python-dotenv>=1.0.0",
     "torchvision>=0.26.0",
     "tensorboard>=2.20.0",
     "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git",
     "einops",
     "pycocotools",
     "psutil",
-    "scikit-learn"
+    "scikit-learn",
+    "matplotlib",
+    "pyyaml"
 ]
 
 [project.scripts]
