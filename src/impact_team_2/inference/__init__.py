@@ -8,13 +8,15 @@ load_dotenv(dotenv_path=_repo_root / ".env.local")
 
 hf_token = os.getenv("HF_TOKEN")
 if not hf_token:
-    raise EnvironmentError(
-        "HF_TOKEN is not set. Create a .env.local file in the repo root with:\n"
-        "  HF_TOKEN=hf_yourtoken\n"
-        "or export HF_TOKEN in your shell."
-    )
+    raise EnvironmentError("HF_TOKEN not set. Add it to .env.local or export it in your shell.")
 login(token=hf_token, add_to_git_credential=True)
 
-from ._inference_medsam3 import predict, build_predictor
-__all__ = ["predict", "build_predictor"]
 
+def __getattr__(name):
+    if name in ("predict", "build_predictor"):
+        from . import _inference_medsam3 as _m
+        return getattr(_m, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["predict", "build_predictor"]
