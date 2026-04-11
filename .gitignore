@@ -17,3 +17,5 @@ datasets/*.npz
 # model checkpoints used for testing
 checkpoints/**/*.safetensors
 checkpoints/*.safetensors
+
+/venv
