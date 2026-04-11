@@ -13,6 +13,10 @@ from PIL import Image as PILImage
 PathLike = Union[str, Path]
 PredictFn = Callable[..., dict]
 
+_UNET_SIZE = 320   # input resolution expected by the vendor UNet (INIA)
+_HF_MODEL_ID = "facebook/sam3"
+_unet_cache: dict = {}
+
 
 def _get_device() -> torch.device:
     if torch.cuda.is_available():
@@ -46,7 +50,6 @@ def _postprocess_mask(mask_array: np.ndarray) -> np.ndarray:
 @torch.no_grad()
 def _run_predict(model, processor, device, image, text_prompt, box, threshold) -> dict:
     pil_img = _to_pil(image)
-
     inputs = processor(
         images=pil_img,
         text=text_prompt,
@@ -54,7 +57,6 @@ def _run_predict(model, processor, device, image, text_prompt, box, threshold) -
         return_tensors="pt",
     ).to(device)
     outputs = model(**inputs)
-
     results = processor.post_process_instance_segmentation(
         outputs,
         threshold=threshold,
@@ -67,7 +69,6 @@ def _run_predict(model, processor, device, image, text_prompt, box, threshold) -
 
     raw_masks = results["masks"].cpu().numpy()
     raw_scores = results["scores"].cpu().numpy()
-
     processed_masks = np.stack([_postprocess_mask(raw_masks[i]) for i in range(len(raw_masks))])
 
     boxes_out = []
@@ -87,23 +88,51 @@ def _run_predict(model, processor, device, image, text_prompt, box, threshold) -
     }
 
 
-_HF_MODEL_ID = "facebook/sam3"
+def load_unet_weights(weights_path: PathLike):
+    """Build UNet++ from INIA and load weights. Cached by path."""
+    weights_path = str(weights_path)
+    if weights_path in _unet_cache:
+        return _unet_cache[weights_path]
+    from impact_team_2.vendor.team_one.INIA import get_model
+    unet = get_model("unet++")
+    unet.predict(np.zeros((1, _UNET_SIZE, _UNET_SIZE, 1), dtype=np.float32), verbose=0)
+    unet.load_weights(weights_path)
+    print(f"[UNet] Loaded weights from {weights_path}")
+    _unet_cache[weights_path] = unet
+    return unet
 
 
-def build_predictor() -> PredictFn:
+def _box_from_unet(unet_model, pil_img: PILImage.Image, threshold: float = 0.5) -> Optional[list]:
+    """Run INIA get_bboxes on the image and scale the result to original dimensions."""
+    from impact_team_2.vendor.team_one.INIA import get_bboxes
+    orig_w, orig_h = pil_img.size
+    gray = np.array(pil_img.convert("L").resize((_UNET_SIZE, _UNET_SIZE))) / 255.0
+    inp = gray[np.newaxis, :, :, np.newaxis].astype(np.float32)
+    bbox = get_bboxes(unet_model, inp, threshold=threshold)[0]
+    if bbox is None:
+        return None
+    sx, sy = orig_w / _UNET_SIZE, orig_h / _UNET_SIZE
+    x_min, y_min, x_max, y_max = bbox
+    return [int(x_min * sx), int(y_min * sy), int(x_max * sx), int(y_max * sy)]
+
+
+def build_predictor(unet_model=None, unet_weights: Optional[PathLike] = None) -> PredictFn:
+    """Build a SAM3 predictor. Pass unet_weights or unet_model for auto bbox generation."""
     from transformers import Sam3Model, Sam3Processor
-
     device = _get_device()
     print(f"[SAM3] Loading model on device: {device}")
-
     model = Sam3Model.from_pretrained(_HF_MODEL_ID).to(device)
     processor = Sam3Processor.from_pretrained(_HF_MODEL_ID)
     model.eval()
-
     print(f"[SAM3] Model ready ({_HF_MODEL_ID})")
 
+    _unet = load_unet_weights(unet_weights) if unet_weights is not None else unet_model
+
     def predict(image, text_prompt: str, box: Optional[list] = None, threshold: float = 0.5) -> dict:
-        return _run_predict(model, processor, device, image, text_prompt, box, threshold)
+        pil_img = _to_pil(image)
+        if box is None and _unet is not None:
+            box = _box_from_unet(_unet, pil_img, threshold=threshold)
+        return _run_predict(model, processor, device, pil_img, text_prompt, box, threshold)
 
     return predict
 
@@ -111,8 +140,9 @@ def build_predictor() -> PredictFn:
 _default_predictor: Optional[PredictFn] = None
 
 
-def predict(image, text_prompt: str, box: Optional[list] = None, threshold: float = 0.5) -> dict:
+def predict(image, text_prompt: str, box: Optional[list] = None, threshold: float = 0.5,
+            unet_weights: Optional[PathLike] = None) -> dict:
     global _default_predictor
     if _default_predictor is None:
-        _default_predictor = build_predictor()
+        _default_predictor = build_predictor(unet_weights=unet_weights)
     return _default_predictor(image, text_prompt, box=box, threshold=threshold)
