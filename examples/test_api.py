@@ -10,13 +10,16 @@ Held-out discipline is the caller's job: we split train/val with a fixed seed
 and only ever train on `train_idx`, only ever evaluate on `val_idx`.
 """
 
+import sys
 from pathlib import Path
 
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from _data import ensure_spleen_data
-import impact_team_2 as I
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _data import load_spleen_data  # noqa: E402
+
+import impact_team_2 as I  # noqa: E402
 from impact_team_2.train import train_medsam3
 from impact_team_2.train.sam import train_sam
 
@@ -28,10 +31,7 @@ PROMPT = "spleen"
 
 
 # --- 0. data ----------------------------------------------------------------
-DATA_DIR = ensure_spleen_data()
-images = np.load(DATA_DIR / "images.npz")["images"]
-masks = np.load(DATA_DIR / "masks.npz")["masks"] > 0
-images[:, 0:20, 25:275] = [16, 16, 16]
+images, masks = load_spleen_data()
 print(f"images: {images.shape} | masks: {masks.shape}")
 
 train_idx, val_idx = train_test_split(
