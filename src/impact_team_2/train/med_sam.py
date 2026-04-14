@@ -152,7 +152,7 @@ def train_medsam3(
         output_dir: where the COCO dataset, config, and LoRA checkpoints are written.
         category: text prompt / class name written into the COCO categories.
         val_split: fraction of `images` held out for validation loss.
-        seed: random seed for the train/val split (matches notebook default 42).
+        seed: random seed for the train/val split only.
         lora_config / training_config: optional overrides; defaults match the notebook.
         pretrained_lora: HF repo id or local `.pt` path used as a warm start.
             Pass `None` to skip the warm start (train LoRA from scratch).
