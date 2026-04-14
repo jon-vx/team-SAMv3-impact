@@ -11,13 +11,9 @@ Usage:
 import os, argparse, pathlib
 import numpy as np
 import matplotlib.pyplot as plt
-from dotenv import load_dotenv
 from PIL import Image as PILImage
-from huggingface_hub import login
 
 _repo = pathlib.Path(__file__).resolve().parent.parent
-load_dotenv(_repo / ".env.local")
-login(token=os.getenv("HF_TOKEN"))
 
 from impact_team_2.vendor.team_one.INIA import fit, load_data, get_bboxes, plot_history, plot_predictions
 from impact_team_2.inference._inference_sam3 import build_predictor, load_unet_weights

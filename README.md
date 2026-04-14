@@ -15,8 +15,9 @@ matching PyTorch wheel (cu118 / cu121 / cu124 / cu126 / cu128, falling back to t
 wheel if no GPU), installs the project in editable mode, and reports whether CUDA is
 visible to torch after the install.
 
-A Hugging Face token is required at runtime (the inference and training paths both call
-`huggingface_hub.login(...)` at import time):
+A Hugging Face token is required at runtime. `impact_team_2` auto-loads `.env.local`
+on import, and `huggingface_hub` / `transformers` pick up `HF_TOKEN` from the
+environment — so just drop the token into `.env.local`:
 
 ```bash
 echo "HF_TOKEN=hf_xxxxxxxxxxxxx" > .env.local
@@ -42,8 +43,8 @@ result = my_predictor(image_array, "spleen", threshold=0.5)
 `train_medsam3`).
 
 The module-level `predict` builds its model lazily on first call, so importing the
-module is cheap. Importing `impact_team_2.inference` does call `huggingface_hub.login`
-at import time, so make sure `HF_TOKEN` is set first.
+module is cheap. Make sure `HF_TOKEN` is set in `.env.local` (or your shell) before
+the first model download.
 
 ## Training
 
