@@ -26,12 +26,15 @@ environment — so just drop the token into `.env.local`:
 echo "HF_TOKEN=hf_xxxxxxxxxxxxx" > .env.local
 ```
 
-SAM3's automatic-bbox mode uses a vendor Keras UNet (INIA); that path needs
-TensorFlow on top of the torch stack:
+SAM3's automatic-bbox mode uses a vendor Keras UNet (INIA). That path isn't part of
+the default install — opt in via the `unet` extra:
 
 ```bash
-pip install tensorflow tensorflow-metal keras-unet-collection
+pip install -e ".[unet]"
 ```
+
+On Apple Silicon, add `pip install tensorflow-metal` afterwards for Metal-accelerated
+TF (Mac-only; installing it on Linux/Windows will break).
 
 ## Model comparison
 

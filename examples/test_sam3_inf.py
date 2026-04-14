@@ -30,9 +30,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _data import load_spleen_data  # noqa: E402
 
 from impact_team_2.inference._inference_sam3 import build_predictor, load_unet_weights  # noqa: E402
-from impact_team_2.vendor.team_one.INIA import (  # noqa: E402
-    fit, load_data, get_bboxes, plot_history, plot_predictions,
-)
+
+try:
+    from impact_team_2.vendor.team_one.INIA import (  # noqa: E402
+        fit, load_data, get_bboxes, plot_history, plot_predictions,
+    )
+except ImportError as e:
+    raise ImportError(
+        "The SAM3 auto-bbox path requires the `unet` extra. Install it with:\n"
+        "    pip install -e \".[unet]\"\n"
+        f"(original error: {e})"
+    ) from e
 
 
 TEXT_PROMPT = "spleen ,organ, spleen organ in ultrasound, dark oval region ,hypoechoic mass"
