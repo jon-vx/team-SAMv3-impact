@@ -116,13 +116,32 @@ def _box_from_unet(unet_model, pil_img: PILImage.Image, threshold: float = 0.5) 
     return [int(x_min * sx), int(y_min * sy), int(x_max * sx), int(y_max * sy)]
 
 
-def build_predictor(unet_model=None, unet_weights: Optional[PathLike] = None) -> PredictFn:
-    """Build a SAM3 predictor. Pass unet_weights or unet_model for auto bbox generation."""
+def build_predictor(
+    unet_model=None,
+    unet_weights: Optional[PathLike] = None,
+    weights_path: Optional[PathLike] = None,
+) -> PredictFn:
+    """Build a SAM3 predictor.
+
+    Pass ``unet_weights`` or ``unet_model`` for auto bbox generation.
+    Pass ``weights_path`` (a ``.safetensors`` file) to load fine-tuned
+    SAM3 weights on top of the base HF model.
+    """
     from transformers import Sam3Model, Sam3Processor
     device = _get_device()
     print(f"[SAM3] Loading model on device: {device}")
     model = Sam3Model.from_pretrained(_HF_MODEL_ID).to(device)
     processor = Sam3Processor.from_pretrained(_HF_MODEL_ID)
+
+    if weights_path is not None:
+        from safetensors.torch import load_file
+        state = load_file(str(weights_path))
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(
+            f"[SAM3] Loaded fine-tuned weights from {weights_path} "
+            f"(missing={len(missing)}, unexpected={len(unexpected)})"
+        )
+
     model.eval()
     print(f"[SAM3] Model ready ({_HF_MODEL_ID})")
 

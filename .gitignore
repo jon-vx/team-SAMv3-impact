@@ -19,3 +19,6 @@ checkpoints/**/*.safetensors
 checkpoints/*.safetensors
 
 /venv
+
+# local planning notes
+/todo.md

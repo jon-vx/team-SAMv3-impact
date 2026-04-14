@@ -164,8 +164,10 @@ class SAMTrainer:
         print("Training Complete.")
                 
     def save_model(self, out_path: str):
+        from safetensors.torch import save_file
         os.makedirs(out_path, exist_ok=True)
-        self.model.save_weights(f"{out_path}/sam3_finetuned_weights.safetensors")
+        state = {k: v.detach().cpu().contiguous() for k, v in self.model.state_dict().items()}
+        save_file(state, f"{out_path}/sam3_finetuned_weights.safetensors")
         self.processor.save_pretrained(out_path)
         print(f"Model weights and processor successfully saved to: {out_path}")
     
