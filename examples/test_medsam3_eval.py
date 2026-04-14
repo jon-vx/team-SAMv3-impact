@@ -2,7 +2,7 @@
 
 Builds two predictors — the public `lal-Joey/MedSAM3_v1` baseline and the
 fine-tuned LoRA from `runs/medsam3_finetune/best_lora_weights.pt` (run
-`examples/test_train.py` first to produce it). Runs both over the spleen
+`examples/test_medsam3_train.py` first to produce it). Runs both over the spleen
 validation split, plots the per-image grids and the training loss curves,
 prints the dice summaries side by side, and surfaces the worst failure cases
 of the fine-tuned model.
@@ -62,8 +62,8 @@ if torch.cuda.is_available():
 # --- fine-tuned -----------------------------------------------------------
 if not FINETUNED_WEIGHTS.exists():
     print(
-        f"\n[test_eval] Fine-tuned weights not found at {FINETUNED_WEIGHTS}. "
-        f"Run examples/test_train.py first to produce them, then re-run this script."
+        f"\n[test_medsam3_eval] Fine-tuned weights not found at {FINETUNED_WEIGHTS}. "
+        f"Run examples/test_medsam3_train.py first to produce them, then re-run this script."
     )
     raise SystemExit(0)
 
