@@ -73,20 +73,14 @@ I.clear_cache()
 
 # --- 3. fine-tune SAM3 on train ---------------------------------------------
 print("\n### 2b. Fine-tuning SAM3 on train split ###")
-# train_sam reads npz files, so dump the train split to disk first.
-SAM_DIR.mkdir(parents=True, exist_ok=True)
-train_images_npz = SAM_DIR / "train_images.npz"
-train_masks_npz = SAM_DIR / "train_masks.npz"
-np.savez(train_images_npz, images=train_images)
-np.savez(train_masks_npz, masks=train_masks.astype(np.uint8))
-train_sam(
-    images_in=str(train_images_npz),
-    masks_in=str(train_masks_npz),
-    model_out=str(SAM_DIR),
+sam_ckpt = train_sam(
+    train_images,
+    train_masks,
+    output_dir=SAM_DIR,
     val_split=0.1,
     epochs=1,
 )
-print(f"SAM3 finetuned weights -> {SAM_DIR}/sam3_finetuned_weights.safetensors")
+print(f"SAM3 finetuned weights -> {sam_ckpt}")
 I.clear_cache()
 
 

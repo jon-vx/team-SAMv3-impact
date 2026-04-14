@@ -1,190 +1,268 @@
-from impact_team_2.train.data import make_fake_box
-from torchmetrics import Metric, MetricCollection
-from typing import cast, Literal
-import os
+"""SAM3 fine-tuning on (images, masks) pairs."""
+
+from __future__ import annotations
+
 from argparse import ArgumentParser
 from pathlib import Path
+from typing import Optional, Union
 
-import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors.torch import save_file
+from sklearn.model_selection import train_test_split
 from torch.optim import Adam
-from torch.utils.data import DataLoader, Dataset
-from torchmetrics.segmentation import DiceScore
-from torchmetrics.classification import BinaryJaccardIndex
-from torchmetrics import MeanMetric
-from transformers import Sam3Model, Sam3Processor, pipeline
-import torch
+from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
+from torchmetrics import MeanMetric, MetricCollection
+from torchmetrics.classification import BinaryF1Score, BinaryJaccardIndex
+from transformers import Sam3Model, Sam3Processor
 
-# Initialize before your loop
-writer = SummaryWriter(log_dir="runs/sam3_experiment")
+from impact_team_2.train.data import SAM3Dataset, make_fake_box
 
-from impact_team_2.train import SAM3Dataset
-
-if torch.cuda.is_available():
-    print("CUDA is available, using GPU.")
-    device = torch.device("cuda")
-elif torch.mps.is_available():
-    print("MPS is available, using GPU.")
-    device = torch.device("mps")
-else:
-    print("Warning: CUDA and MPS not available, using CPU instead.")
-    device = torch.device("cpu")
-
-tracked_metrics = MetricCollection([
-    DiceScore(num_classes=2), 
-    BinaryJaccardIndex(),
-    MeanMetric(),
-])
-
-global_step = 0
+PathLike = Union[str, Path]
+_CHECKPOINT_NAME = "sam3_finetuned_weights.safetensors"
+_HF_MODEL_ID = "facebook/sam3"
 
 
+def _pick_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
-def _run_epoch(model, processor, dataloader, optimizer, loss_fn, metrics: MetricCollection):
-    global global_step
-    
-    for batch_images, batch_masks, batch_boxes in dataloader:
-        optimizer.zero_grad() # clear gradients
-        images_list = [img.numpy() for img in batch_images]
-        boxes_list = batch_boxes.unsqueeze(1).tolist()
-        target_masks = cast(torch.Tensor, batch_masks.float().unsqueeze(1).to(device))
 
-        # I couldn't figure out how to train in batch so you get one at a time for now
-        inputs = processor(
-            images=images_list,
-            input_boxes=boxes_list,
-            return_tensors="pt"
-        ).to(device)
-        outputs = model(**inputs)
+def _build_metrics(device: torch.device) -> MetricCollection:
+    return MetricCollection({
+        "dice": BinaryF1Score(),
+        "iou": BinaryJaccardIndex(),
+        "loss": MeanMetric(),
+    }).to(device)
 
-        predicted_logits = outputs.pred_masks
-        predicted_logits = predicted_logits[:, :1, :, :] # this outputs probabilities I believe
-
-        # rescale the output mask back to its original size (300, 300)
-        predicted_logits_resized = F.interpolate(
-            predicted_logits,
-            size=target_masks.shape[-2:],
-            mode="bilinear",
-            align_corners=False
-        )
-
-        # compute binary cross-entropy
-        loss = loss_fn(predicted_logits_resized, target_masks)
-
-        if model.training:
-            loss.backward()
-            optimizer.step()
-            
-        predicted_probs = torch.sigmoid(predicted_logits_resized)
-
-        for k, v in metrics.items():
-            if k == "avg_loss":
-                step_loss = loss.item()
-                metrics[k].update(step_loss)
-                avg_loss = metrics[k].compute()
-                writer.add_scalar("loss/step_loss", step_loss, global_step)
-                writer.add_scalar("loss/avg_loss", avg_loss, global_step)
-                print(f"{step_loss=}, {avg_loss=}")
-                
-            else:
-                metrics[k].update(predicted_probs, target_masks.long()) # type:ignore
-                step_val = metrics[k].compute()
-                writer.add_scalar(f"other/{k}", step_val, global_step)
-                
-            
-        
-        global_step += 1
-
-    return
-
-tracked_metrics = MetricCollection({
-    "dice": DiceScore(num_classes=2), 
-    "iou": BinaryJaccardIndex(),
-    "avg_loss": MeanMetric()
-})
 
 class SAMTrainer:
-    def __init__(self, images: np.ndarray, masks: np.ndarray, boxes: np.ndarray, epochs: int = 20, lr = 1e-4):
-        self.processor = Sam3Processor.from_pretrained("facebook/sam3")
-        self.model = Sam3Model.from_pretrained("facebook/sam3").to(device)
-        
-        # freeze weights other than mask decoder
-        # saves vram
-        for name, param in self.model.named_parameters():
-            if "mask_decoder" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-
-        self.dataset = SAM3Dataset(images, masks, boxes)
-        self.dataloaders = {}
-        self.dataloaders["train"] = DataLoader(self.dataset, batch_size=1, shuffle=True)
-        
+    def __init__(
+        self,
+        images: np.ndarray,
+        masks: np.ndarray,
+        boxes: np.ndarray,
+        *,
+        output_dir: PathLike,
+        epochs: int = 20,
+        lr: float = 1e-4,
+        val_split: float = 0.1,
+        seed: int = 42,
+        device: Optional[torch.device] = None,
+    ):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.epochs = epochs
-        
-        self.optimizer = Adam(params=[p for p in self.model.parameters() if p.requires_grad], lr=lr)
+        self.device = device or _pick_device()
+        print(f"[SAM trainer] device: {self.device}")
+
+        self.processor = Sam3Processor.from_pretrained(_HF_MODEL_ID)
+        self.model = Sam3Model.from_pretrained(_HF_MODEL_ID).to(self.device)
+
+        # Freeze everything except the mask decoder.
+        for name, param in self.model.named_parameters():
+            param.requires_grad = "mask_decoder" in name
+        self._trainable_keys = {
+            n for n, p in self.model.named_parameters() if p.requires_grad
+        }
+        n_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"[SAM trainer] trainable params: {n_trainable:,}")
+
+        self.optimizer = Adam(
+            [p for p in self.model.parameters() if p.requires_grad], lr=lr
+        )
         self.loss_fn = nn.BCEWithLogitsLoss()
-        
-        self.metrics = {}
-        self.metrics["train"] = tracked_metrics.clone().to(device)
 
-    def make_split(self, splits: list[tuple[str, float, bool]]):
-        total = len(self.dataset)
-        amts = [round(total * s[1]) for s in splits]
-        rem = total - sum(amts)
+        dataset = SAM3Dataset(images, masks, boxes)
+        self.train_loader, self.val_loader = self._split(dataset, val_split, seed)
 
-        ds_splits = torch.utils.data.random_split(self.dataset, [rem, *amts])
-        self.dataloaders["train"] = DataLoader(ds_splits[0], batch_size=1, shuffle=True)
-        for i in range(1, len(ds_splits)):
-            ds = ds_splits[i]
-            name, _, shuffle = splits[i-1]
-            self.dataloaders[name] = DataLoader(ds, batch_size=1, shuffle=shuffle)
-            self.metrics[name] = tracked_metrics.clone().to(device)
+        self.train_metrics = _build_metrics(self.device)
+        self.val_metrics = _build_metrics(self.device)
 
-    def make_validation_split(self, amt: float):
-        self.make_split([("val", amt, False)])
+        self.writer = SummaryWriter(log_dir=str(self.output_dir / "tb"))
+        self.global_step = 0
+        self.best_val_dice = -1.0
 
-    def start(self):
-        for split_k, split_dl in self.dataloaders.items():
-            self.model.eval()
-            if split_k == "train":
-                self.model.train()
-            
-            for epoch in range(self.epochs):
-                _run_epoch(self.model, self.processor, split_dl, self.optimizer, self.loss_fn, self.metrics[split_k])
-                vals = self.metrics[split_k].compute()
-                print(f"\n======= Epoch {epoch + 1}/{self.epochs} Summary =======")
-                for k, v in vals.items():
-                    print(f"{k}: {v}")
-                
-        print("Training Complete.")
-                
-    def save_model(self, out_path: str):
-        from safetensors.torch import save_file
-        os.makedirs(out_path, exist_ok=True)
-        state = {k: v.detach().cpu().contiguous() for k, v in self.model.state_dict().items()}
-        save_file(state, f"{out_path}/sam3_finetuned_weights.safetensors")
-        self.processor.save_pretrained(out_path)
-        print(f"Model weights and processor successfully saved to: {out_path}")
-    
+    @staticmethod
+    def _split(dataset, val_split: float, seed: int):
+        n = len(dataset)
+        n_val = max(1, int(round(n * val_split))) if val_split > 0 else 0
+        if n_val == 0 or n_val >= n:
+            return DataLoader(dataset, batch_size=1, shuffle=True), None
+        idx = np.arange(n)
+        train_idx, val_idx = train_test_split(idx, test_size=n_val, random_state=seed)
+        return (
+            DataLoader(Subset(dataset, train_idx.tolist()), batch_size=1, shuffle=True),
+            DataLoader(Subset(dataset, val_idx.tolist()), batch_size=1, shuffle=False),
+        )
 
-def train_sam(images_in: str, masks_in: str, model_out: str, epochs: int = 20, val_split: float = 0.2, lr = 1e-4):
-    images = np.load(images_in)["images"]
-    masks = np.load(masks_in)["masks"]
-    
-    # you would replace this with the UNet bounding box generation #
+    def _forward(self, batch) -> tuple[torch.Tensor, torch.Tensor]:
+        images, masks, boxes = batch
+        images_list = [img.numpy() for img in images]
+        boxes_list = boxes.unsqueeze(1).tolist()
+        targets = masks.float().unsqueeze(1).to(self.device)
+
+        inputs = self.processor(
+            images=images_list,
+            input_boxes=boxes_list,
+            return_tensors="pt",
+        ).to(self.device)
+        outputs = self.model(**inputs)
+
+        logits = outputs.pred_masks[:, :1, :, :]
+        logits = F.interpolate(
+            logits, size=targets.shape[-2:], mode="bilinear", align_corners=False
+        )
+        return logits, targets
+
+    def _update_metrics(self, metrics, logits, targets, loss):
+        probs = torch.sigmoid(logits).detach()
+        target_int = targets.long()
+        metrics["dice"].update(probs, target_int)
+        metrics["iou"].update(probs, target_int)
+        metrics["loss"].update(loss.detach())
+
+    def train_one_epoch(self) -> dict:
+        self.model.train()
+        self.train_metrics.reset()
+        for batch in self.train_loader:
+            self.optimizer.zero_grad()
+            logits, targets = self._forward(batch)
+            loss = self.loss_fn(logits, targets)
+            loss.backward()
+            self.optimizer.step()
+            self._update_metrics(self.train_metrics, logits, targets, loss)
+            self.writer.add_scalar("train/step_loss", loss.item(), self.global_step)
+            self.global_step += 1
+        return {k: v.item() for k, v in self.train_metrics.compute().items()}
+
+    @torch.inference_mode()
+    def eval_one_epoch(self) -> dict:
+        if self.val_loader is None:
+            return {}
+        self.model.eval()
+        self.val_metrics.reset()
+        for batch in self.val_loader:
+            logits, targets = self._forward(batch)
+            loss = self.loss_fn(logits, targets)
+            self._update_metrics(self.val_metrics, logits, targets, loss)
+        return {k: v.item() for k, v in self.val_metrics.compute().items()}
+
+    def save(self, path: PathLike) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        full = self.model.state_dict()
+        trainable = {
+            k: v.detach().cpu().contiguous()
+            for k, v in full.items()
+            if k in self._trainable_keys
+        }
+        save_file(trainable, str(path))
+        size_mb = path.stat().st_size / 1e6
+        print(f"[SAM trainer] saved {len(trainable)} tensors "
+              f"({size_mb:.1f} MB) -> {path}")
+        return path
+
+    def fit(self) -> Path:
+        best_path = self.output_dir / _CHECKPOINT_NAME
+        last_path = self.output_dir / ("last_" + _CHECKPOINT_NAME)
+        try:
+            for epoch in range(1, self.epochs + 1):
+                train_stats = self.train_one_epoch()
+                val_stats = self.eval_one_epoch()
+
+                for k, v in train_stats.items():
+                    self.writer.add_scalar(f"train/{k}", v, epoch)
+                for k, v in val_stats.items():
+                    self.writer.add_scalar(f"val/{k}", v, epoch)
+
+                msg = f"[epoch {epoch}/{self.epochs}] " + ", ".join(
+                    f"train_{k}={v:.4f}" for k, v in train_stats.items()
+                )
+                if val_stats:
+                    msg += " | " + ", ".join(
+                        f"val_{k}={v:.4f}" for k, v in val_stats.items()
+                    )
+                print(msg)
+
+                self.save(last_path)
+                val_dice = val_stats.get("dice", float("nan"))
+                if val_stats and val_dice > self.best_val_dice:
+                    self.best_val_dice = val_dice
+                    self.save(best_path)
+
+            # No val split -> promote the last checkpoint to the canonical slot.
+            if self.val_loader is None:
+                import shutil
+                shutil.copyfile(last_path, best_path)
+        finally:
+            self.writer.flush()
+            self.writer.close()
+
+        return best_path
+
+
+def _compute_boxes(masks: np.ndarray) -> np.ndarray:
     boxes = np.ones((masks.shape[0], 4))
     for i in range(masks.shape[0]):
         boxes[i] = make_fake_box(masks[i])
-    
-    trainer = SAMTrainer(images, masks, boxes, epochs, lr)
-    trainer.make_validation_split(val_split)
-    trainer.start()
-    trainer.save_model(model_out)
+    return boxes
+
+
+def train_sam(
+    images: np.ndarray,
+    masks: np.ndarray,
+    *,
+    output_dir: PathLike,
+    epochs: int = 20,
+    lr: float = 1e-4,
+    val_split: float = 0.1,
+    seed: int = 42,
+) -> Path:
+    """Fine-tune SAM3 on in-memory (images, masks).
+
+    Args:
+        images: uint8 array, shape (N, H, W, 3).
+        masks:  bool/0-1 array, shape (N, H, W).
+        output_dir: where checkpoints and TensorBoard logs are written.
+        epochs, lr, val_split, seed: training hyperparameters.
+
+    Returns:
+        Path to the best checkpoint (falls back to the last if no val split).
+    """
+    boxes = _compute_boxes(masks.astype(np.uint8))
+    trainer = SAMTrainer(
+        images, masks, boxes,
+        output_dir=output_dir, epochs=epochs, lr=lr,
+        val_split=val_split, seed=seed,
+    )
+    return trainer.fit()
+
+
+def train_sam_from_files(
+    images_in: PathLike,
+    masks_in: PathLike,
+    model_out: PathLike,
+    *,
+    epochs: int = 20,
+    lr: float = 1e-4,
+    val_split: float = 0.1,
+    seed: int = 42,
+) -> Path:
+    """CLI-friendly wrapper: load `images_in` / `masks_in` npz files, then train."""
+    images = np.load(images_in)["images"]
+    masks = np.load(masks_in)["masks"]
+    return train_sam(
+        images, masks,
+        output_dir=model_out, epochs=epochs, lr=lr,
+        val_split=val_split, seed=seed,
+    )
 
 
 if __name__ == "__main__":
@@ -192,8 +270,15 @@ if __name__ == "__main__":
     parser.add_argument("images_in")
     parser.add_argument("masks_in")
     parser.add_argument("model_out")
-    parser.add_argument("--val-split", type=float, default=0.2)
+    parser.add_argument("--val-split", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=1)
-
+    parser.add_argument("--lr", type=float, default=1e-4)
     args = parser.parse_args()
-    train_sam(**vars(args))
+    train_sam_from_files(
+        images_in=args.images_in,
+        masks_in=args.masks_in,
+        model_out=args.model_out,
+        epochs=args.epochs,
+        val_split=args.val_split,
+        lr=args.lr,
+    )
