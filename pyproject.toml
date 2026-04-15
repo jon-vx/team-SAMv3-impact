@@ -10,13 +10,17 @@ requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.8.4",
     "evaluate>=0.4.6",
-    "torch>=2.11.0",
-    "transformers>=5.5.0",
-    "torchmetrics>=1.9.0",
+    # Pinned to torch 2.7.x: MedSAM3 requires >=2.7, and 2.8+ starts pulling
+    # in partial cu13 NVIDIA wheels that conflict with our cu12 stack.
+    "torch>=2.7,<2.8",
+    "transformers>=5.0,<6",
+    "torchmetrics>=1.5",
     "python-dotenv>=1.0.0",
-    "torchvision>=0.26.0",
+    "torchvision>=0.22,<0.23",
     "tensorboard",
-    "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git",
+    # Pinned to a specific commit so upstream changes (e.g. torch version bumps)
+    # can't silently break our install. Bump this SHA to pick up new MedSAM3 work.
+    "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git@f79eef3f4ccf",
     "einops",
     "pycocotools",
     "psutil",

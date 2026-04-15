@@ -40,18 +40,17 @@ if [ "${OS_NAME}" = "Darwin" ] && [ "${ARCH_NAME}" = "arm64" ]; then
     TF_PIN="tensorflow-macos==2.16.*"
     TF_EXTRA="tensorflow-metal"
 elif command -v nvidia-smi >/dev/null 2>&1; then
+    # NVIDIA drivers are forward-compatible across CUDA minors, so we standardize
+    # on cu126 for all 12.x drivers (torch 2.7.x ships this wheel). Older
+    # drivers (11.8/11.9) get cu118. Anything unmapped falls back to CPU.
     CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: [0-9]+\.[0-9]+' | head -1 | awk '{print $3}')
     case "${CUDA_VER}" in
-        12.8*|12.9*) TORCH_INDEX="cu128"; TF_PIN="tensorflow[and-cuda]==2.17.*" ;;
-        12.6*|12.7*) TORCH_INDEX="cu126"; TF_PIN="tensorflow[and-cuda]==2.17.*" ;;
-        12.4*|12.5*) TORCH_INDEX="cu124"; TF_PIN="tensorflow[and-cuda]==2.17.*" ;;
-        12.1*|12.2*|12.3*) TORCH_INDEX="cu121"; TF_PIN="tensorflow[and-cuda]==2.16.*" ;;
-        11.8*|11.9*|12.0*) TORCH_INDEX="cu118"; TF_PIN="tensorflow==2.14.*" ;;
-        "") echo "[setup] nvidia-smi present but couldn't parse CUDA version — falling back to CPU TF"
-            TF_PIN="tensorflow-cpu==2.17.*" ;;
-        *)  echo "[setup] driver CUDA ${CUDA_VER} has no matching wheel — falling back to CPU TF"
-            TF_PIN="tensorflow-cpu==2.17.*" ;;
+        12.*) TORCH_INDEX="cu126" ;;
+        11.8*|11.9*) TORCH_INDEX="cu118" ;;
+        *)  echo "[setup] driver CUDA ${CUDA_VER:-unknown} unmapped — falling back to CPU torch"
+            TORCH_INDEX="cpu" ;;
     esac
+    TF_PIN="tensorflow==2.17.*"
     if [ -n "${TORCH_INDEX}" ]; then
         echo "[setup] driver CUDA ${CUDA_VER} → torch=${TORCH_INDEX}, tf=${TF_PIN}"
     fi
@@ -61,17 +60,13 @@ else
     echo "[setup] no nvidia-smi found → installing CPU torch + CPU tensorflow"
 fi
 
-"${PIP}" install -e "${REPO_ROOT}[unet]" "${TF_PIN}" ${TF_EXTRA:+${TF_EXTRA}}
-
-if [ -n "${TORCH_INDEX}" ] && [ "${TORCH_INDEX}" != "cpu" ]; then
-    "${PIP}" install --force-reinstall --no-deps \
-        --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" \
-        torch torchvision
-elif [ "${TORCH_INDEX}" = "cpu" ]; then
-    "${PIP}" install --force-reinstall --no-deps \
-        --index-url "https://download.pytorch.org/whl/cpu" \
-        torch torchvision
+# Install torch from the matched index first so its CUDA-specific wheels are
+# already in place before the editable install runs.
+if [ -n "${TORCH_INDEX}" ]; then
+    "${PIP}" install --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" torch torchvision
 fi
+
+"${PIP}" install -e "${REPO_ROOT}[unet]" "${TF_PIN}" ${TF_EXTRA:+${TF_EXTRA}}
 
 if [ ! -f "${REPO_ROOT}/.env.local" ] && [ -f "${REPO_ROOT}/.env.example" ]; then
     cp "${REPO_ROOT}/.env.example" "${REPO_ROOT}/.env.local"
@@ -129,10 +124,7 @@ except Exception as e:
     print(f"[setup] TF import failed: {e}")
 PY
 
-# Activate iff this script was sourced; otherwise tell the user how.
 if (return 0 2>/dev/null); then
-    # shellcheck disable=SC1091
-    source "${VENV_DIR}/bin/activate"
     echo "[setup] venv activated"
 else
     echo "[setup] done. Activate with: source ${VENV_DIR}/bin/activate"
