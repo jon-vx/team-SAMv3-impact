@@ -26,20 +26,13 @@ environment — so just drop the token into `.env.local`:
 echo "HF_TOKEN=hf_xxxxxxxxxxxxx" > .env.local
 ```
 
-SAM3's automatic-bbox mode uses a vendor Keras UNet (INIA). `setup.sh` installs this
-automatically via the `unet` extra. If you're managing deps manually, add it yourself:
-
-```bash
-pip install -e ".[unet]"
-```
-
 ## Model comparison
 
 |                   | SAM3                                            | MedSAM3                                       |
 |-------------------|-------------------------------------------------|-----------------------------------------------|
 | Backbone          | `facebook/sam3` (HuggingFace Transformers)      | `lal-Joey/MedSAM3_v1` (native sam3 + LoRA)    |
 | Domain            | General-purpose, vanilla weights                | LoRA-adapted on medical imagery               |
-| Bounding box      | Auto-generated via vendor UNet (INIA)           | Not required — detected from the text prompt  |
+| Bounding box      | Optional — text-only by default; UNet (INIA) cascade available | Detected from the text prompt |
 | Fine-tune style   | Unfreeze mask decoder                           | LoRA adapters on vision / text / mask decoder |
 
 ## Inference
@@ -156,8 +149,16 @@ ckpt = train_sam(
     output_dir="runs/sam3_finetune",
     epochs=10,
     val_split=0.1,
+    box_source="none",       # "none" (text-only, default), "unet", or "gt"
+    text_prompt="spleen",    # used when box_source="none"
 )
 ```
+
+`box_source` controls what SAM3 sees as a prompt during training:
+
+- `"none"` (default) — text-only. SAM3 learns from the text prompt alone; no UNet needed at inference.
+- `"unet"` — boxes come from the UNet++ detector (detect-then-segment cascade). Pass a loaded Keras UNet via `unet_model=...`. UNet misses fall back to a full-image box so training stays UNet-free.
+- `"gt"` — boxes derived from the ground-truth mask. Upper-bound baseline only; SAM3 won't get this free signal at inference.
 
 Only the mask decoder is unfrozen, so the checkpoint at
 `runs/sam3_finetune/sam3_finetuned_weights.safetensors` contains just the
@@ -192,7 +193,7 @@ show_prediction_grid(images, masks, worst_dice(out, k=5), title="Worst dice")
 | `examples/test_medsam3_inf.py`   | Run baseline MedSAM3 over the spleen val split, plot the prediction grid.                                            |
 | `examples/test_medsam3_train.py` | Download the public ultrasound spleen dataset and fine-tune MedSAM3 on it.                                           |
 | `examples/test_medsam3_eval.py`  | Full before/after loop for MedSAM3: baseline vs fine-tuned, plus loss curves and worst-case grid.                    |
-| `examples/test_sam3_train.py`    | Fine-tune **SAM3** on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                |
+| `examples/test_sam3_train.py`    | Fine-tune SAM3 on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                |
 | `examples/test_sam3_inf.py`      | Evaluate SAM3 on the spleen val split (baseline or fine-tuned), report per-image dice + summary, save overlays.      |
 | `examples/test_api.py`           | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.              |
 
@@ -202,55 +203,18 @@ venv/bin/python examples/test_medsam3_train.py    # train (writes runs/medsam3_f
 venv/bin/python examples/test_medsam3_eval.py     # plot before/after
 
 # SAM3 flow
-venv/bin/python examples/test_sam3_train.py                 # full dataset, 10 epochs
-venv/bin/python examples/test_sam3_train.py --epochs 20     # longer run
-venv/bin/python examples/test_sam3_train.py --n 32 --epochs 2   # quick sanity run
+venv/bin/python examples/test_sam3_train.py                          # text-only, 10 epochs (default)
+venv/bin/python examples/test_sam3_train.py --box-source unet \
+    --unet checkpoints/best_unetp.weights.h5                         # detect-then-segment
+venv/bin/python examples/test_sam3_train.py --box-source gt          # GT-box upper bound
+venv/bin/python examples/test_sam3_train.py --n 32 --epochs 2        # quick sanity run
 
-venv/bin/python examples/test_sam3_inf.py                   # baseline eval on val split
-venv/bin/python examples/test_sam3_inf.py --weights runs/sam3_finetune/sam3_finetuned_weights.safetensors
-venv/bin/python examples/test_sam3_inf.py --train           # retrain UNet bbox generator first
+venv/bin/python examples/test_sam3_inf.py --no-unet                  # text-only eval (matches default training)
+venv/bin/python examples/test_sam3_inf.py                            # UNet cascade eval
+venv/bin/python examples/test_sam3_inf.py --weights runs/sam3_finetune/sam3_finetuned_weights.safetensors --no-unet
+venv/bin/python examples/test_sam3_inf.py --train                    # retrain UNet bbox generator first
 ```
 
-### SAM3 quickstart (fresh clone → fine-tuned eval)
-
-SAM3 training uses ground-truth masks to derive bounding boxes, so the UNet is
-only involved at inference time. First run needs three one-time steps — setup,
-UNet training, SAM3 fine-tuning — then you can re-run inference/eval as many
-times as you want.
-
-```bash
-# 0. one-time setup
-./setup.sh
-echo "HF_TOKEN=hf_xxxxxxxxxxxxx" > .env.local
-venv/bin/pip install -e ".[unet]"                  # TF + keras-unet-collection
-
-# 1. train the UNet bounding-box generator (saves checkpoints/best_unetp.weights.h5)
-venv/bin/python examples/test_sam3_inf.py --train
-
-# 2. fine-tune SAM3 on the spleen dataset (writes runs/sam3_finetune/)
-venv/bin/python examples/test_sam3_train.py
-
-# 3. evaluate — SAM3 + UNet + fine-tuned weights
-venv/bin/python examples/test_sam3_inf.py \
-    --weights runs/sam3_finetune/sam3_finetuned_weights.safetensors
-```
-
-Step 1 is the only step that needs the `unet` extra; steps 0 and 2 work on
-the default install.
-
-`test_medsam3_train.py` lazy-downloads `images.npz` / `masks.npz` from
-[DivyanshuTak/Ultrasoud_Unet_Segmentation](https://github.com/DivyanshuTak/Ultrasoud_Unet_Segmentation)
-into `datasets/ultrasound_spleen/` on first run; the SAM3 scripts reuse the
-same cache.
-
-`test_sam3_inf.py` always evaluates against the held-out val split (seed `42`,
-`val_split=0.1` to match training) and reports per-image dice plus a summary
-(mean, median, min/max, `dice>0.5`, `dice>0.3`). Pass `--weights <path>` for a
-fine-tuned checkpoint; omit it to benchmark the baseline. Overlays for the
-first `--n-overlays` val images are written to `runs/` so baseline and
-fine-tuned results can be compared visually. Requires the UNet++ bbox generator
-at `checkpoints/best_unetp.weights.h5` — pass `--train` once to create it, or
-`--unet <path>` to point at an existing one.
 
 ## Project Structure
 

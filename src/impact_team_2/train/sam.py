@@ -47,13 +47,14 @@ class SAMTrainer:
         self,
         images: np.ndarray,
         masks: np.ndarray,
-        boxes: np.ndarray,
+        boxes: Optional[np.ndarray],
         *,
         output_dir: PathLike,
         epochs: int = 20,
         lr: float = 1e-4,
         val_split: float = 0.1,
         seed: int = 42,
+        text_prompt: str = "spleen",
         device: Optional[torch.device] = None,
     ):
         self.output_dir = Path(output_dir)
@@ -79,6 +80,10 @@ class SAMTrainer:
         )
         self.loss_fn = nn.BCEWithLogitsLoss()
 
+        self.use_boxes = boxes is not None
+        self.text_prompt = text_prompt
+        print(f"[SAM trainer] prompt: "
+              f"{'boxes' if self.use_boxes else f'text={text_prompt!r}'}")
         dataset = SAM3Dataset(images, masks, boxes)
         self.train_loader, self.val_loader = self._split(dataset, val_split, seed)
 
@@ -105,13 +110,17 @@ class SAMTrainer:
     def _forward(self, batch) -> tuple[torch.Tensor, torch.Tensor]:
         images, masks, boxes = batch
         images_list = [img.numpy() for img in images]
-        boxes_list = boxes.unsqueeze(1).tolist()
         targets = masks.float().unsqueeze(1).to(self.device)
 
+        if self.use_boxes:
+            proc_kwargs = dict(input_boxes=boxes.unsqueeze(1).tolist())
+        else:
+            # Text prompt broadcast per image in the batch.
+            proc_kwargs = dict(text=[self.text_prompt] * len(images_list))
         inputs = self.processor(
             images=images_list,
-            input_boxes=boxes_list,
             return_tensors="pt",
+            **proc_kwargs,
         ).to(self.device)
         outputs = self.model(**inputs)
 
@@ -208,11 +217,44 @@ class SAMTrainer:
         return best_path
 
 
-def _compute_boxes(masks: np.ndarray) -> np.ndarray:
-    boxes = np.ones((masks.shape[0], 4))
-    for i in range(masks.shape[0]):
-        boxes[i] = make_fake_box(masks[i])
-    return boxes
+def _compute_boxes(
+    images: np.ndarray,
+    masks: np.ndarray,
+    *,
+    source: str = "none",
+    unet_model=None,
+) -> Optional[np.ndarray]:
+    """Produce per-image bounding boxes for SAM3 training.
+
+    source="none"  -> return None (text-only training, no box prompt)
+    source="unet"  -> run UNet per image, fall back to GT if UNet misses
+    source="gt"    -> tight box from the ground-truth mask (the 'cheating' baseline)
+    """
+    if source == "none":
+        return None
+    if source == "gt":
+        boxes = np.ones((masks.shape[0], 4))
+        for i in range(masks.shape[0]):
+            boxes[i] = make_fake_box(masks[i])
+        return boxes
+    if source == "unet":
+        if unet_model is None:
+            raise ValueError("source='unet' requires unet_model")
+        from impact_team_2.inference._inference_sam3 import _box_from_unet, _to_pil
+        boxes = np.zeros((masks.shape[0], 4))
+        misses = 0
+        for i in range(masks.shape[0]):
+            box = _box_from_unet(unet_model, _to_pil(images[i]), threshold=0.5)
+            if box is None:
+                h, w = images[i].shape[:2]
+                box = np.array([0.0, 0.0, float(w), float(h)])
+                misses += 1
+            boxes[i] = box
+        if misses:
+            print(f"[SAM trainer] UNet missed on {misses}/{masks.shape[0]} images "
+                  f"(fell back to full-image box — matches inference behavior)")
+        return boxes
+    raise ValueError(f"unknown box source: {source!r}")
 
 
 def train_sam(
@@ -224,6 +266,9 @@ def train_sam(
     lr: float = 1e-4,
     val_split: float = 0.1,
     seed: int = 42,
+    box_source: str = "none",
+    unet_model=None,
+    text_prompt: str = "spleen",
 ) -> Path:
     """Fine-tune SAM3 on in-memory (images, masks).
 
@@ -232,15 +277,23 @@ def train_sam(
         masks:  bool/0-1 array, shape (N, H, W).
         output_dir: where checkpoints and TensorBoard logs are written.
         epochs, lr, val_split, seed: training hyperparameters.
+        box_source: one of "none" (text-only), "unet" (UNet-predicted boxes,
+            matches inference), or "gt" (boxes derived from GT masks — the
+            "cheating" baseline, useful for upper-bound comparisons).
+        unet_model: required when box_source="unet"; a loaded Keras UNet.
+        text_prompt: text used as the prompt when box_source="none".
 
     Returns:
         Path to the best checkpoint (falls back to the last if no val split).
     """
-    boxes = _compute_boxes(masks.astype(np.uint8))
+    boxes = _compute_boxes(
+        images, masks.astype(np.uint8),
+        source=box_source, unet_model=unet_model,
+    )
     trainer = SAMTrainer(
         images, masks, boxes,
         output_dir=output_dir, epochs=epochs, lr=lr,
-        val_split=val_split, seed=seed,
+        val_split=val_split, seed=seed, text_prompt=text_prompt,
     )
     return trainer.fit()
 
@@ -254,6 +307,9 @@ def train_sam_from_files(
     lr: float = 1e-4,
     val_split: float = 0.1,
     seed: int = 42,
+    box_source: str = "none",
+    unet_model=None,
+    text_prompt: str = "spleen",
 ) -> Path:
     """CLI-friendly wrapper: load `images_in` / `masks_in` npz files, then train."""
     images = np.load(images_in)["images"]
@@ -262,6 +318,7 @@ def train_sam_from_files(
         images, masks,
         output_dir=model_out, epochs=epochs, lr=lr,
         val_split=val_split, seed=seed,
+        box_source=box_source, unet_model=unet_model, text_prompt=text_prompt,
     )
 
 

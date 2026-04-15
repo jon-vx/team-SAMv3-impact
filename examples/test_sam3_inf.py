@@ -95,6 +95,9 @@ def main() -> int:
                         help="Fine-tuned SAM3 .safetensors checkpoint")
     parser.add_argument("--unet", type=Path, default=DEFAULT_UNET,
                         help="UNet++ weights for automatic bbox generation")
+    parser.add_argument("--no-unet", action="store_true",
+                        help="Skip the UNet bbox step; evaluate SAM3 on text prompt alone "
+                             "(use this to evaluate a text-only fine-tuned model)")
     parser.add_argument("--train", action="store_true",
                         help="Retrain the UNet before evaluation")
     parser.add_argument("--threshold", type=float, default=0.5)
@@ -115,7 +118,12 @@ def main() -> int:
     print(f"[eval] val split: {len(val_idx)} / {images.shape[0]}")
 
     # --- UNet --------------------------------------------------------------
-    if args.train:
+    if args.no_unet:
+        if args.train:
+            raise ValueError("--train and --no-unet are mutually exclusive")
+        unet_model = None
+        print("[UNet] skipped (--no-unet): SAM3 will use the text prompt alone")
+    elif args.train:
         print("[UNet] retraining from scratch")
         X_train, y_train, X_test, y_test = load_data(
             images_path=str(DATA_DIR / "images.npz"),
@@ -131,7 +139,8 @@ def main() -> int:
         if not args.unet.exists():
             raise FileNotFoundError(
                 f"UNet weights not found at {args.unet}. "
-                f"Pass --train to train a fresh UNet, or --unet to point at an existing one."
+                f"Pass --train to train a fresh UNet, --unet to point at an existing one, "
+                f"or --no-unet to evaluate text-only."
             )
         unet_model = load_unet_weights(args.unet)
 

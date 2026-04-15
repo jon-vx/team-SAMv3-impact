@@ -1,12 +1,21 @@
 """Train SAM3 on the spleen ultrasound dataset end-to-end.
 
-Defaults produce a real training run on the full dataset. After training,
-verifies the checkpoint is mask-decoder-only and that inference can load it.
+Three prompting modes, controlled by `--box-source`:
+  * "none" (default) — text-only training. SAM3 learns to segment from just the
+    text prompt ("spleen"). No UNet needed at inference.
+  * "unet" — bounding boxes come from the trained UNet (detect-then-segment
+    cascade). Requires `--unet` to point at UNet weights.
+  * "gt"   — boxes derived from the ground-truth mask. Upper-bound / baseline
+    only; at inference SAM3 doesn't get this free signal.
+
+Defaults run on the full dataset. After training, verifies the checkpoint is
+mask-decoder-only and that inference can load it.
 
 Run:
-    python examples/test_sam3_train.py                    # full dataset, 10 epochs
-    python examples/test_sam3_train.py --epochs 20
-    python examples/test_sam3_train.py --n 32 --epochs 2  # quick smoke test
+    python examples/test_sam3_train.py                              # text-only
+    python examples/test_sam3_train.py --box-source unet --unet checkpoints/best_unetp.weights.h5
+    python examples/test_sam3_train.py --box-source gt              # GT-box baseline
+    python examples/test_sam3_train.py --n 32 --epochs 2            # quick smoke test
 """
 
 from __future__ import annotations
@@ -37,6 +46,14 @@ def main() -> int:
     parser.add_argument("--val-split", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=OUT_DIR)
+    parser.add_argument("--box-source", choices=("none", "unet", "gt"),
+                        default="none",
+                        help="where the SAM3 box prompt comes from during training")
+    parser.add_argument("--unet", type=Path,
+                        default=REPO_ROOT / "checkpoints/best_unetp.weights.h5",
+                        help="UNet weights (only used when --box-source=unet)")
+    parser.add_argument("--text-prompt", default="spleen",
+                        help="text prompt used when --box-source=none")
     parser.add_argument("--no-inference-check", action="store_true",
                         help="skip the build_predictor load-check at the end")
     args = parser.parse_args()
@@ -52,7 +69,18 @@ def main() -> int:
         print(f"[train] capped to {n} samples")
 
     print(f"[train] training for {args.epochs} epoch(s), "
-          f"lr={args.lr}, val_split={args.val_split}, out={args.output_dir}")
+          f"lr={args.lr}, val_split={args.val_split}, box_source={args.box_source}, "
+          f"out={args.output_dir}")
+
+    unet_model = None
+    if args.box_source == "unet":
+        from impact_team_2.inference._inference_sam3 import load_unet_weights
+        if not args.unet.exists():
+            raise FileNotFoundError(
+                f"--box-source=unet needs a UNet checkpoint but {args.unet} doesn't exist. "
+                f"Train one first via test_sam3_inf.py --train, or pass --unet <path>."
+            )
+        unet_model = load_unet_weights(args.unet)
 
     ckpt = train_sam(
         images, masks,
@@ -61,6 +89,9 @@ def main() -> int:
         lr=args.lr,
         val_split=args.val_split,
         seed=args.seed,
+        box_source=args.box_source,
+        unet_model=unet_model,
+        text_prompt=args.text_prompt,
     )
 
     # --- checkpoint sanity checks -----------------------------------------
