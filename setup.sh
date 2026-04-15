@@ -61,11 +61,17 @@ else
     echo "[setup] no nvidia-smi found → installing CPU torch + CPU tensorflow"
 fi
 
-if [ -n "${TORCH_INDEX}" ]; then
-    "${PIP}" install --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" torch torchvision
-fi
-
 "${PIP}" install -e "${REPO_ROOT}[unet]" "${TF_PIN}" ${TF_EXTRA:+${TF_EXTRA}}
+
+if [ -n "${TORCH_INDEX}" ] && [ "${TORCH_INDEX}" != "cpu" ]; then
+    "${PIP}" install --force-reinstall --no-deps \
+        --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" \
+        torch torchvision
+elif [ "${TORCH_INDEX}" = "cpu" ]; then
+    "${PIP}" install --force-reinstall --no-deps \
+        --index-url "https://download.pytorch.org/whl/cpu" \
+        torch torchvision
+fi
 
 if [ ! -f "${REPO_ROOT}/.env.local" ] && [ -f "${REPO_ROOT}/.env.example" ]; then
     cp "${REPO_ROOT}/.env.example" "${REPO_ROOT}/.env.local"
