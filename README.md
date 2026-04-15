@@ -214,6 +214,33 @@ venv/bin/python examples/test_sam3_inf.py --weights runs/sam3_finetune/sam3_fine
 venv/bin/python examples/test_sam3_inf.py --train           # retrain UNet bbox generator first
 ```
 
+### SAM3 quickstart (fresh clone → fine-tuned eval)
+
+SAM3 training uses ground-truth masks to derive bounding boxes, so the UNet is
+only involved at inference time. First run needs three one-time steps — setup,
+UNet training, SAM3 fine-tuning — then you can re-run inference/eval as many
+times as you want.
+
+```bash
+# 0. one-time setup
+./setup.sh
+echo "HF_TOKEN=hf_xxxxxxxxxxxxx" > .env.local
+venv/bin/pip install -e ".[unet]"                  # TF + keras-unet-collection
+
+# 1. train the UNet bounding-box generator (saves checkpoints/best_unetp.weights.h5)
+venv/bin/python examples/test_sam3_inf.py --train
+
+# 2. fine-tune SAM3 on the spleen dataset (writes runs/sam3_finetune/)
+venv/bin/python examples/test_sam3_train.py
+
+# 3. evaluate — SAM3 + UNet + fine-tuned weights
+venv/bin/python examples/test_sam3_inf.py \
+    --weights runs/sam3_finetune/sam3_finetuned_weights.safetensors
+```
+
+Step 1 is the only step that needs the `unet` extra; steps 0 and 2 work on
+the default install.
+
 `test_medsam3_train.py` lazy-downloads `images.npz` / `masks.npz` from
 [DivyanshuTak/Ultrasoud_Unet_Segmentation](https://github.com/DivyanshuTak/Ultrasoud_Unet_Segmentation)
 into `datasets/ultrasound_spleen/` on first run; the SAM3 scripts reuse the

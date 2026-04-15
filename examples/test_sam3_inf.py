@@ -16,6 +16,23 @@ Usage:
 
 from __future__ import annotations
 
+# These env vars MUST be set before TensorFlow is imported (via INIA / UNet).
+# They're needed to keep the UNet path portable across machines:
+#   * TF_XLA_FLAGS=--tf_xla_auto_jit=0
+#       Disables XLA JIT. XLA tries to invoke `ptxas` and load
+#       `libdevice.10.bc` from the system CUDA toolkit; on many shared GPU
+#       nodes those aren't on PATH (only the driver is), which crashes TF.
+#       The UNet is tiny — XLA isn't buying us anything here.
+#   * TF_FORCE_GPU_ALLOW_GROWTH=true
+#       Don't grab all GPU memory on startup. Polite on shared GPUs.
+#   * TF_GPU_ALLOCATOR=cuda_malloc_async
+#       Newer async allocator, better VRAM reuse with PyTorch co-tenancy.
+import os
+os.environ.setdefault("TF_XLA_FLAGS", "--tf_xla_auto_jit=0")
+os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+os.environ.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # silence TF info/warnings
+
 import argparse
 import sys
 from pathlib import Path
