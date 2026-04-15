@@ -72,6 +72,26 @@ if [ ! -f "${REPO_ROOT}/.env.local" ] && [ -f "${REPO_ROOT}/.env.example" ]; the
     echo "[setup] created .env.local from .env.example — set HF_TOKEN before running"
 fi
 
+ACTIVATE="${VENV_DIR}/bin/activate"
+if ! grep -q "impact_team_2: nvidia wheel libs" "${ACTIVATE}" 2>/dev/null; then
+    cat >> "${ACTIVATE}" <<'ACT'
+
+# impact_team_2: nvidia wheel libs -- add cuDNN/cuBLAS/NCCL from pip wheels to loader path
+_NVIDIA_LIB_DIR="$(python -c "import os, site; import glob; dirs=[]
+for sp in site.getsitepackages():
+    for d in glob.glob(os.path.join(sp, 'nvidia', '*', 'lib')):
+        dirs.append(d)
+print(os.pathsep.join(dirs))" 2>/dev/null)"
+if [ -n "${_NVIDIA_LIB_DIR}" ]; then
+    export LD_LIBRARY_PATH="${_NVIDIA_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+unset _NVIDIA_LIB_DIR
+ACT
+    echo "[setup] patched venv activate script to add NVIDIA wheel libs to LD_LIBRARY_PATH"
+fi
+
+source "${ACTIVATE}"
+
 # CUDA availability check — non-fatal, just a heads up.
 "${VENV_DIR}/bin/python" - <<'PY'
 import torch

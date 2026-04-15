@@ -15,7 +15,7 @@ dependencies = [
     "torchmetrics>=1.9.0",
     "python-dotenv>=1.0.0",
     "torchvision>=0.26.0",
-    "tensorboard>=2.20.0",
+    "tensorboard",
     "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git",
     "einops",
     "pycocotools",
