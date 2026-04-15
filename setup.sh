@@ -73,22 +73,28 @@ if [ ! -f "${REPO_ROOT}/.env.local" ] && [ -f "${REPO_ROOT}/.env.example" ]; the
 fi
 
 ACTIVATE="${VENV_DIR}/bin/activate"
-if ! grep -q "impact_team_2: nvidia wheel libs" "${ACTIVATE}" 2>/dev/null; then
-    cat >> "${ACTIVATE}" <<'ACT'
+# Remove any previous (possibly broken) patch so re-runs always get the current version.
+if grep -q "impact_team_2: nvidia wheel libs" "${ACTIVATE}" 2>/dev/null; then
+    # Strip from the marker line to EOF.
+    sed -i '/# impact_team_2: nvidia wheel libs/,$d' "${ACTIVATE}"
+fi
+cat >> "${ACTIVATE}" <<'ACT'
 
 # impact_team_2: nvidia wheel libs -- add cuDNN/cuBLAS/NCCL from pip wheels to loader path
-_NVIDIA_LIB_DIR="$(python -c "import os, site; import glob; dirs=[]
-for sp in site.getsitepackages():
-    for d in glob.glob(os.path.join(sp, 'nvidia', '*', 'lib')):
-        dirs.append(d)
-print(os.pathsep.join(dirs))" 2>/dev/null)"
-if [ -n "${_NVIDIA_LIB_DIR}" ]; then
-    export LD_LIBRARY_PATH="${_NVIDIA_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+_IT2_VENV="${VIRTUAL_ENV:-}"
+if [ -n "${_IT2_VENV}" ]; then
+    _IT2_LIBS=""
+    for _d in "${_IT2_VENV}"/lib/python*/site-packages/nvidia/*/lib; do
+        [ -d "${_d}" ] && _IT2_LIBS="${_IT2_LIBS:+${_IT2_LIBS}:}${_d}"
+    done
+    if [ -n "${_IT2_LIBS}" ]; then
+        export LD_LIBRARY_PATH="${_IT2_LIBS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    fi
+    unset _IT2_LIBS _d
 fi
-unset _NVIDIA_LIB_DIR
+unset _IT2_VENV
 ACT
-    echo "[setup] patched venv activate script to add NVIDIA wheel libs to LD_LIBRARY_PATH"
-fi
+echo "[setup] patched venv activate script to add NVIDIA wheel libs to LD_LIBRARY_PATH"
 
 source "${ACTIVATE}"
 
