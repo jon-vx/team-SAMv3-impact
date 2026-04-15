@@ -14,9 +14,9 @@ cd team-SAMv3-impact
 ```
 
 `setup.sh` creates `venv/`, detects your CUDA driver via `nvidia-smi` and installs the
-matching PyTorch wheel (cu118 / cu121 / cu124 / cu126 / cu128, falling back to the CPU
-wheel if no GPU), installs the project in editable mode, and reports whether CUDA is
-visible to torch after the install.
+matching PyTorch wheel (cu118 for older drivers, cu126 for CUDA 12.x, CPU fallback
+otherwise), installs the project in editable mode, and reports whether CUDA is visible
+to torch after the install.
 
 A Hugging Face token is required at runtime. `impact_team_2` auto-loads `.env.local`
 on import, and `huggingface_hub` / `transformers` pick up `HF_TOKEN` from the
@@ -26,15 +26,12 @@ environment — so just drop the token into `.env.local`:
 echo "HF_TOKEN=hf_xxxxxxxxxxxxx" > .env.local
 ```
 
-SAM3's automatic-bbox mode uses a vendor Keras UNet (INIA). That path isn't part of
-the default install — opt in via the `unet` extra:
+SAM3's automatic-bbox mode uses a vendor Keras UNet (INIA). `setup.sh` installs this
+automatically via the `unet` extra. If you're managing deps manually, add it yourself:
 
 ```bash
 pip install -e ".[unet]"
 ```
-
-On Apple Silicon, add `pip install tensorflow-metal` afterwards for Metal-accelerated
-TF (Mac-only; installing it on Linux/Windows will break).
 
 ## Model comparison
 
@@ -93,7 +90,7 @@ from impact_team_2.inference._inference_sam3 import build_predictor, load_unet_w
 # Option 1 — load the UNet weights explicitly (cached across calls)
 unet = load_unet_weights("checkpoints/best_unetp.weights.h5")
 predictor = build_predictor(unet_model=unet)
-result = predictor("scan.png", text_prompt="spleen organ in ultrasound")
+result = predictor("scan.png", text_prompt="spleen")
 
 # Option 2 — hand the weights path to build_predictor directly
 predictor = build_predictor(unet_weights="checkpoints/best_unetp.weights.h5")
@@ -180,7 +177,7 @@ from impact_team_2.visual import (
 )
 
 predictor = build_predictor("runs/medsam3_finetune/best_lora_weights.pt")
-out = evaluate(predictor, images, masks, val_idx, prompt="spleen", threshold=0.01)
+out = evaluate(predictor, images, masks, val_idx, prompt="spleen", threshold=0.5)
 print(out["summary"])    # mean/max/min dice, dice>0.5, dice>0.3, score range
 
 show_prediction_grid(images, masks, out["results"], title="Fine-tuned")

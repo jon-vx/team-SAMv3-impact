@@ -50,13 +50,13 @@ elif command -v nvidia-smi >/dev/null 2>&1; then
         *)  echo "[setup] driver CUDA ${CUDA_VER:-unknown} unmapped — falling back to CPU torch"
             TORCH_INDEX="cpu" ;;
     esac
-    TF_PIN="tensorflow==2.17.*"
+    TF_PIN="tensorflow==2.19.*"
     if [ -n "${TORCH_INDEX}" ]; then
         echo "[setup] driver CUDA ${CUDA_VER} → torch=${TORCH_INDEX}, tf=${TF_PIN}"
     fi
 else
     TORCH_INDEX="cpu"
-    TF_PIN="tensorflow-cpu==2.17.*"
+    TF_PIN="tensorflow-cpu==2.19.*"
     echo "[setup] no nvidia-smi found → installing CPU torch + CPU tensorflow"
 fi
 
@@ -81,7 +81,9 @@ if grep -q "impact_team_2: nvidia wheel libs" "${ACTIVATE}" 2>/dev/null; then
 fi
 cat >> "${ACTIVATE}" <<'ACT'
 
-# impact_team_2: nvidia wheel libs -- add cuDNN/cuBLAS/NCCL from pip wheels to loader path
+# impact_team_2: nvidia wheel libs -- add cuDNN/cuBLAS/NCCL from pip wheels to
+# loader path, and point XLA at libdevice.10.bc from the nvidia-cuda-nvcc-cu12
+# wheel so TF/UNet training works on GPU.
 _IT2_VENV="${VIRTUAL_ENV:-}"
 if [ -n "${_IT2_VENV}" ]; then
     _IT2_LIBS=""
@@ -91,6 +93,9 @@ if [ -n "${_IT2_VENV}" ]; then
     if [ -n "${_IT2_LIBS}" ]; then
         export LD_LIBRARY_PATH="${_IT2_LIBS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     fi
+    for _d in "${_IT2_VENV}"/lib/python*/site-packages/nvidia/cuda_nvcc; do
+        [ -d "${_d}" ] && export XLA_FLAGS="--xla_gpu_cuda_data_dir=${_d}"
+    done
     unset _IT2_LIBS _d
 fi
 unset _IT2_VENV

@@ -1,44 +1,41 @@
 #!/usr/bin/env python3
-"""SAM3 inference + evaluation on the spleen ultrasound val split.
+"""Detect-then-segment evaluation harness for SAM3 on spleen ultrasound.
 
-Always evaluates SAM3 (optionally with a fine-tuned `--weights` checkpoint)
-against the held-out val split and reports per-image dice + summary. Bounding
-boxes are generated automatically by the vendor UNet (INIA). Overlays for a
-handful of val images are saved under `runs/`.
+Two-stage cascade: the vendor Keras UNet++ (INIA) predicts a coarse segmentation
+and emits a bounding box, SAM3 then refines inside that box using a text prompt
+to produce the final mask. The script runs the pipeline over a seeded held-out
+val split and reports per-image dice + summary stats (mean, median, min, max,
+count > 0.5, count > 0.3).
+
+By default the baseline `facebook/sam3` weights are used. Passing `--weights`
+loads a fine-tuned SAM3 checkpoint (from `test_sam3_train.py`) on top, so you
+can diff baseline vs. fine-tuned numbers. Passing `--train` first retrains the
+UNet from scratch before evaluation.
+
+Side effects under `runs/`:
+    sam3_{baseline|finetuned}_val_NNN_overlay.png  — first `--n-overlays` val images
+    sam3_{baseline|finetuned}_<stem>_overlay.png   — each extra positional image
 
 Usage:
-    python examples/test_sam3_inf.py
-    python examples/test_sam3_inf.py --weights runs/sam3_finetune/sam3_finetuned_weights.safetensors
-    python examples/test_sam3_inf.py --unet path/to/unet.h5
-    python examples/test_sam3_inf.py --train                       # retrain UNet first
-    python examples/test_sam3_inf.py extra/image.png               # also overlay these
+    python examples/test_sam3_inf.py                              # baseline eval
+    python examples/test_sam3_inf.py --weights <.safetensors>     # fine-tuned eval
+    python examples/test_sam3_inf.py --unet path/to/unet.h5       # custom UNet weights
+    python examples/test_sam3_inf.py --train                      # retrain UNet first
+    python examples/test_sam3_inf.py extra/image.png              # also overlay these
 """
 
 from __future__ import annotations
 
-# These env vars MUST be set before TensorFlow is imported (via INIA / UNet).
-# They're needed to keep the UNet path portable across machines:
-#   * TF_XLA_FLAGS=--tf_xla_auto_jit=0
-#       Disables XLA JIT. XLA tries to invoke `ptxas` and load
-#       `libdevice.10.bc` from the system CUDA toolkit; on many shared GPU
-#       nodes those aren't on PATH (only the driver is), which crashes TF.
-#       The UNet is tiny — XLA isn't buying us anything here.
-#   * TF_FORCE_GPU_ALLOW_GROWTH=true
-#       Don't grab all GPU memory on startup. Polite on shared GPUs.
-#   * TF_GPU_ALLOCATOR=cuda_malloc_async
-#       Newer async allocator, better VRAM reuse with PyTorch co-tenancy.
 import os
-os.environ.setdefault("TF_XLA_FLAGS", "--tf_xla_auto_jit=0")
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
 os.environ.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # silence TF info/warnings
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import argparse
 import sys
 from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
 from PIL import Image as PILImage
 from sklearn.model_selection import train_test_split
 
@@ -60,7 +57,7 @@ except ImportError as e:
     ) from e
 
 
-TEXT_PROMPT = "spleen ,organ, spleen organ in ultrasound, dark oval region ,hypoechoic mass"
+TEXT_PROMPT = "spleen"
 DEFAULT_UNET = _repo / "checkpoints" / "best_unetp.weights.h5"
 DATA_DIR = _repo / "datasets" / "ultrasound_spleen"
 OUT_DIR = _repo / "runs"
@@ -100,7 +97,7 @@ def main() -> int:
                         help="UNet++ weights for automatic bbox generation")
     parser.add_argument("--train", action="store_true",
                         help="Retrain the UNet before evaluation")
-    parser.add_argument("--threshold", type=float, default=0.01)
+    parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--val-split", type=float, default=0.1,
                         help="Fraction held out for evaluation (must match training)")
     parser.add_argument("--seed", type=int, default=42)

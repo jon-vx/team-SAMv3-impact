@@ -36,6 +36,9 @@ dependencies = [
 unet = [
     "tensorflow",
     "keras-unet-collection",
+    # Ships libdevice.10.bc that TF/XLA needs for UNet training on GPU.
+    # Linux-only; on macOS TF uses Metal and doesn't need it.
+    "nvidia-cuda-nvcc-cu12; platform_system == 'Linux'",
 ]
 
 [project.scripts]
