@@ -24,17 +24,20 @@ def dice_score(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
     return float(2 * intersection / (denom + 1e-8))
 
 
-def resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
-    """Nearest-neighbor resize a boolean/0-1 mask to `shape=(H, W)`.
+def resize_mask(mask: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+    """Nearest-neighbor resize a boolean/0-1 mask to `shape=(H, W, ...)`.
 
-    Always returns a bool array. If the mask is already the target shape,
-    it is returned as bool without a PIL round-trip.
+    Only the first two entries of `shape` are used — this matches
+    `ndarray.shape` so callers can pass it directly. Always returns a bool
+    array. If the mask already has the target H/W, it is returned as bool
+    without a PIL round-trip.
     """
-    if mask.shape == shape:
+    target = (shape[0], shape[1])
+    if mask.shape == target:
         return mask.astype(bool)
     return np.array(
         PILImage.fromarray(mask.astype(np.uint8)).resize(
-            (shape[1], shape[0]), PILImage.NEAREST
+            (target[1], target[0]), PILImage.NEAREST
         ),
         dtype=bool,
     )

@@ -22,7 +22,7 @@ The caller is responsible for passing held-out / external data to
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Literal, Optional, Sequence, overload
 
 import numpy as np
 from tqdm import tqdm
@@ -32,6 +32,7 @@ from impact_team_2.visual.utils import dice_score, resize_mask, summarize_dice
 
 Model = str   # "SAM" | "MedSAM"
 Mode = str    # "not_finetuned" | "finetuned"
+PredictFn = Callable[..., dict]
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
@@ -48,7 +49,7 @@ _SUPPORTED_MODES = ("not_finetuned", "finetuned")
 # Predictor resolution
 # ---------------------------------------------------------------------------
 
-_predictor_cache: dict[tuple[Model, Mode], object] = {}
+_predictor_cache: dict[tuple[Model, Mode], PredictFn] = {}
 
 
 def clear_cache() -> None:
@@ -75,7 +76,7 @@ def _sam_finetuned_checkpoint() -> Path:
     return SAM_FINETUNED_DIR / "sam3_finetuned_weights.safetensors"
 
 
-def _build_predictor(model: Model, mode: Mode):
+def _build_predictor(model: Model, mode: Mode) -> PredictFn:
     key = (model, mode)
     if key in _predictor_cache:
         return _predictor_cache[key]
@@ -122,6 +123,26 @@ def _best_mask(result: dict) -> Optional[np.ndarray]:
     return result["masks"][int(result["scores"].argmax())].astype(bool)
 
 
+@overload
+def predict(
+    image,
+    prompt: str,
+    *,
+    model: Model = ...,
+    mode: Mode = ...,
+    threshold: float = ...,
+    return_details: Literal[False] = False,
+) -> Optional[np.ndarray]: ...
+@overload
+def predict(
+    image,
+    prompt: str,
+    *,
+    model: Model = ...,
+    mode: Mode = ...,
+    threshold: float = ...,
+    return_details: Literal[True],
+) -> dict: ...
 def predict(
     image,
     prompt: str,
@@ -194,8 +215,10 @@ def evaluate(
                 f"unknown mode {mode!r}; expected one of {_SUPPORTED_MODES}"
             )
 
-    save_enabled = save_overlays_dir is not None and save_overlays_n != 0
-    overlays_root = Path(save_overlays_dir) if save_enabled else None
+    if save_overlays_dir is not None and save_overlays_n != 0:
+        overlays_root: Optional[Path] = Path(save_overlays_dir)
+    else:
+        overlays_root = None
 
     results: dict[str, dict] = {}
     n = images.shape[0]
@@ -221,12 +244,12 @@ def evaluate(
                 pred_mask = _best_mask(out)
                 if pred_mask is None:
                     dice_scores.append(0.0)
-                    if save_enabled:
+                    if overlays_root is not None:
                         overlay_buf.append({"pred": None, "score": None, "img": out.get("image")})
                     continue
                 gt = resize_mask(ground_truth[i].astype(bool), pred_mask.shape)
                 dice_scores.append(dice_score(pred_mask, gt))
-                if save_enabled:
+                if overlays_root is not None:
                     scores_arr = out.get("scores")
                     best_score = (
                         float(scores_arr[int(scores_arr.argmax())])
@@ -238,7 +261,7 @@ def evaluate(
                         "img": out.get("image"),
                     })
 
-            if save_enabled:
+            if overlays_root is not None:
                 _write_overlays(
                     out_dir=overlays_root / key.replace("/", "_"),
                     tag=key,

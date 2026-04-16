@@ -8,6 +8,10 @@ Flow:
 
 Held-out discipline is the caller's job: we split train/val with a fixed seed
 and only ever train on `train_idx`, only ever evaluate on `val_idx`.
+
+Each eval also writes the 5 worst-dice 4-panel overlays per (model, mode) to
+`runs/api_overlays/<model>_<mode>/` so baseline vs. fine-tuned regressions
+are visible at a glance.
 """
 
 from pathlib import Path
@@ -25,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNS = REPO_ROOT / "runs"
 SAM_DIR = RUNS / "sam3_finetune"
 MEDSAM_DIR = RUNS / "medsam3_finetune"
+OVERLAY_DIR = RUNS / "api_overlays"
 PROMPT = "spleen"
 
 
@@ -50,6 +55,8 @@ baseline = I.evaluate(
     modes=["not_finetuned"],
     prompt=PROMPT,
     threshold=0.01,
+    save_overlays_dir=OVERLAY_DIR,
+    save_overlays_n="worst:5",
 )
 for key, res in baseline.items():
     all_summaries[key] = res["summary"]
@@ -91,6 +98,8 @@ finetuned = I.evaluate(
     modes=["finetuned"],
     prompt=PROMPT,
     threshold=0.01,
+    save_overlays_dir=OVERLAY_DIR,
+    save_overlays_n="worst:5",
 )
 for key, res in finetuned.items():
     all_summaries[key] = res["summary"]

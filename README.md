@@ -175,6 +175,7 @@ from impact_team_2.inference import build_predictor
 from impact_team_2.visual import (
     evaluate, show_prediction_grid, show_training_curves,
     worst_dice, best_dice,
+    save_overlay, dice_score,
 )
 
 predictor = build_predictor("runs/medsam3_finetune/best_lora_weights.pt")
@@ -184,6 +185,10 @@ print(out["summary"])    # mean/max/min dice, dice>0.5, dice>0.3, score range
 show_prediction_grid(images, masks, out["results"], title="Fine-tuned")
 show_training_curves("runs/medsam3_finetune/val_stats.json")
 show_prediction_grid(images, masks, worst_dice(out, k=5), title="Worst dice")
+
+# Ad-hoc 4-panel overlay (image | GT | pred | diff) for a single case
+save_overlay(images[0], masks[0], pred_mask, "runs/overlay.png",
+             dice=dice_score(pred_mask, masks[0]), title="val[0]")
 ```
 
 ## Examples
@@ -194,7 +199,7 @@ show_prediction_grid(images, masks, worst_dice(out, k=5), title="Worst dice")
 | `examples/test_medsam3_train.py` | Download the public ultrasound spleen dataset and fine-tune MedSAM3 on it.                                           |
 | `examples/test_medsam3_eval.py`  | Full before/after loop for MedSAM3: baseline vs fine-tuned, plus loss curves and worst-case grid.                    |
 | `examples/test_sam3_train.py`    | Fine-tune SAM3 on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                |
-| `examples/test_sam3_inf.py`      | Evaluate SAM3 on the spleen val split (baseline or fine-tuned), report per-image dice + summary, save overlays.      |
+| `examples/test_sam3_inf.py`      | Evaluate SAM3 on the spleen val split (baseline or fine-tuned), report per-image dice + summary, save 4-panel (image \| GT \| pred \| diff) overlays — pick which to save via `--save-overlays-n {N \| all \| worst:K \| best:K}`. |
 | `examples/test_api.py`           | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.              |
 
 ```bash
@@ -235,7 +240,7 @@ venv/bin/python examples/test_sam3_inf.py --train                    # retrain U
     │   └── sam.py                 # SAM3 trainer (mask-decoder only)
     ├── vendor/medsam3/            # vendored MedSAM3: lora_layers + train_sam3_lora_native
     ├── vendor/team_one/INIA/      # vendored UNet++ bbox generator
-    └── visual/                    # evaluate, prediction grid, training curves, dice helpers
+    └── visual/                    # evaluate, prediction grid + 4-panel overlays, training curves, pure mask helpers (dice / resize / summarize)
 ```
 
 ## Acknowledgments
