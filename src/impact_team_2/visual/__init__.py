@@ -8,7 +8,12 @@ from impact_team_2.visual.plot import (
     worst_dice,
     best_dice,
 )
-from impact_team_2.visual.overlays import save_overlay, resolve_save_indices
+from impact_team_2.visual.overlays import (
+    save_overlay,
+    save_comparison_overlay,
+    save_contact_sheet,
+    resolve_save_indices,
+)
 
 __all__ = [
     "dice_score",
@@ -22,5 +27,7 @@ __all__ = [
     "worst_dice",
     "best_dice",
     "save_overlay",
+    "save_comparison_overlay",
+    "save_contact_sheet",
     "resolve_save_indices",
 ]

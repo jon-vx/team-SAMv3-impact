@@ -30,6 +30,8 @@ RUNS = REPO_ROOT / "runs"
 SAM_DIR = RUNS / "sam3_finetune"
 MEDSAM_DIR = RUNS / "medsam3_finetune"
 OVERLAY_DIR = RUNS / "api_overlays"
+COMPARISON_DIR = RUNS / "api_comparisons"
+CONTACT_DIR = RUNS / "api_contact_sheets"
 PROMPT = "spleen"
 
 
@@ -54,9 +56,9 @@ baseline = I.evaluate(
     ground_truth=val_masks,
     modes=["not_finetuned"],
     prompt=PROMPT,
-    threshold=0.01,
+    threshold=0.5,
     save_overlays_dir=OVERLAY_DIR,
-    save_overlays_n="worst:5",
+    save_overlays_n="all",
 )
 for key, res in baseline.items():
     all_summaries[key] = res["summary"]
@@ -83,7 +85,7 @@ sam_ckpt = train_sam(
     train_masks,
     output_dir=SAM_DIR,
     val_split=0.1,
-    epochs=1,
+    epochs=10,
 )
 print(f"SAM3 finetuned weights -> {sam_ckpt}")
 I.clear_cache()
@@ -97,9 +99,9 @@ finetuned = I.evaluate(
     ground_truth=val_masks,
     modes=["finetuned"],
     prompt=PROMPT,
-    threshold=0.01,
+    threshold=0.5,
     save_overlays_dir=OVERLAY_DIR,
-    save_overlays_n="worst:5",
+    save_overlays_n="all",
 )
 for key, res in finetuned.items():
     all_summaries[key] = res["summary"]
@@ -110,14 +112,15 @@ I.clear_cache()
 # --- 5. compare -------------------------------------------------------------
 print("\n### 4. Comparison ###")
 metric_keys = ("n", "mean_dice", "max_dice", "min_dice", "dice_gt_0.5", "dice_gt_0.3")
-header = f"{'metric':<14}" + "".join(f"{k:>22}" for k in all_summaries)
+col_w = max(len(k) for k in all_summaries) + 4
+header = f"{'metric':<14}" + "".join(f"{k:>{col_w}}" for k in all_summaries)
 print(header)
 print("-" * len(header))
 for m in metric_keys:
     row = f"{m:<14}"
     for key in all_summaries:
         v = all_summaries[key].get(m, "-")
-        row += f"{v:>22.4f}" if isinstance(v, float) else f"{str(v):>22}"
+        row += f"{v:>{col_w}.4f}" if isinstance(v, float) else f"{str(v):>{col_w}}"
     print(row)
 
 # Deltas: finetuned - not_finetuned, per model
@@ -130,3 +133,47 @@ for model in ("SAM", "MedSAM"):
     print(f"  {model}:")
     for m in ("mean_dice", "max_dice", "min_dice", "dice_gt_0.5", "dice_gt_0.3"):
         print(f"    {m}: {f[m] - b[m]:+.4f}")
+
+
+# --- 6. per-image comparison + contact sheets -----------------------------
+from impact_team_2.visual import save_comparison_overlay, save_contact_sheet
+
+
+def _best(res_i: dict):
+    if res_i.get("masks") is None or res_i.get("scores") is None:
+        return None
+    return res_i["masks"][int(res_i["scores"].argmax())].astype(bool)
+
+
+models = ("SAM", "MedSAM")
+n_val = len(val_images)
+
+print(f"\n### 5. Writing per-image comparisons -> {COMPARISON_DIR.name}/ ({n_val} files)")
+for i in range(n_val):
+    baseline_preds = {m: _best(baseline[f"{m}/not_finetuned"]["results"][i]) for m in models}
+    finetuned_preds = {m: _best(finetuned[f"{m}/finetuned"]["results"][i]) for m in models}
+    baseline_dice_i = {m: baseline[f"{m}/not_finetuned"]["dice"][i] for m in models}
+    finetuned_dice_i = {m: finetuned[f"{m}/finetuned"]["dice"][i] for m in models}
+    save_comparison_overlay(
+        val_images[i], val_masks[i],
+        baseline_preds, finetuned_preds,
+        COMPARISON_DIR / f"val_{i:03d}.png",
+        baseline_dice=baseline_dice_i,
+        finetuned_dice=finetuned_dice_i,
+        title=f"val[{i}]  —  baseline (top) vs finetuned (bottom)",
+    )
+
+print(f"\n### 6. Writing contact sheets -> {CONTACT_DIR.name}/ (4 files)")
+for phase_dict, suffix in ((baseline, "not_finetuned"), (finetuned, "finetuned")):
+    for model in models:
+        key = f"{model}/{suffix}"
+        res = phase_dict[key]
+        preds = [_best(res["results"][i]) for i in range(n_val)]
+        save_contact_sheet(
+            images=list(val_images),
+            gt_masks=list(val_masks),
+            pred_masks=preds,
+            out_path=CONTACT_DIR / f"{key.replace('/', '_')}.png",
+            dice_scores=res["dice"],
+            title=f"{key}  —  {n_val} val images",
+        )
