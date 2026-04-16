@@ -12,9 +12,11 @@ loads a fine-tuned SAM3 checkpoint (from `test_sam3_train.py`) on top, so you
 can diff baseline vs. fine-tuned numbers. Passing `--train` first retrains the
 UNet from scratch before evaluation.
 
-Side effects under `runs/`:
-    sam3_{baseline|finetuned}_val_NNN_overlay.png  — first `--n-overlays` val images
-    sam3_{baseline|finetuned}_<stem>_overlay.png   — each extra positional image
+Side effects under `runs/` (or `--save-overlays-dir`):
+    sam3_{baseline|finetuned}_val_NNN_dice0.XX[_score0.XX].png  — 4-panel overlay
+        (image | GT | pred | diff) per selected val image. Selection is
+        controlled by `--save-overlays-n` (int N / "all" / "worst:K" / "best:K").
+    sam3_{baseline|finetuned}_<stem>_overlay.png  — each extra positional image
 
 Usage:
     python examples/test_sam3_inf.py                              # baseline eval
@@ -34,16 +36,16 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
-from PIL import Image as PILImage
 from sklearn.model_selection import train_test_split
 
 _repo = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _data import load_spleen_data  # noqa: E402
+from _data import load_spleen_data
 
-from impact_team_2.inference._inference_sam3 import build_predictor, load_unet_weights  # noqa: E402
+from impact_team_2.inference._inference_sam3 import build_predictor, load_unet_weights
+from impact_team_2.visual import dice_score, resize_mask, save_overlay, resolve_save_indices
 
 try:
     from impact_team_2.vendor.team_one.INIA import (  # noqa: E402
@@ -63,28 +65,20 @@ DATA_DIR = _repo / "datasets" / "ultrasound_spleen"
 OUT_DIR = _repo / "runs"
 
 
-def _dice(pred: np.ndarray, gt: np.ndarray) -> float:
-    pred = pred.astype(bool)
-    gt = gt.astype(bool)
-    denom = pred.sum() + gt.sum()
-    if denom == 0:
-        return 0.0
-    return float(2 * np.logical_and(pred, gt).sum() / denom)
+def _parse_n(value: str):
+    """Let --save-overlays-n accept either an int or a string selector."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
 
 
-def _save_overlay(result: dict, out_path: Path) -> None:
-    if result["masks"] is None:
-        return
-    best = result["masks"][int(result["scores"].argmax())]
-    base = np.array(result["image"].convert("RGBA"))
-    overlay = np.zeros_like(base)
-    overlay[best] = [171, 71, 188, 140]
-    alpha = overlay[:, :, 3:4] / 255.0
-    base[:, :, :3] = (
-        base[:, :, :3] * (1 - alpha) + overlay[:, :, :3] * alpha
-    ).astype(np.uint8)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    PILImage.fromarray(base, mode="RGBA").convert("RGB").save(out_path)
+def _extract_best(result: dict) -> tuple[Optional[np.ndarray], Optional[float]]:
+    if result.get("masks") is None or result.get("scores") is None:
+        return None, None
+    scores = result["scores"]
+    idx = int(scores.argmax())
+    return result["masks"][idx].astype(bool), float(scores[idx])
 
 
 def main() -> int:
@@ -104,9 +98,19 @@ def main() -> int:
     parser.add_argument("--val-split", type=float, default=0.1,
                         help="Fraction held out for evaluation (must match training)")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--n-overlays", type=int, default=3,
-                        help="How many val-set overlays to save")
+    parser.add_argument("--save-overlays-dir", type=Path, default=None,
+                        help="Directory to write per-image overlay PNGs "
+                             "(image|GT|pred|diff). Default: runs/.")
+    parser.add_argument("--save-overlays-n", default="3",
+                        help="Which overlays to save: int N (first N), 'all', "
+                             "'worst:K', or 'best:K'. Default: 3 (back-compat with --n-overlays).")
+    parser.add_argument("--n-overlays", type=int, default=None,
+                        help="[deprecated] alias for --save-overlays-n.")
     args = parser.parse_args()
+
+    # --n-overlays back-compat
+    if args.n_overlays is not None:
+        args.save_overlays_n = str(args.n_overlays)
 
     # --- data --------------------------------------------------------------
     print("[eval] loading spleen data")
@@ -155,32 +159,45 @@ def main() -> int:
 
     # --- evaluate on val split --------------------------------------------
     dice_scores: list[float] = []
+    buf: list[dict] = []  # keep (pred_mask, score, image) per val image for overlay
     for i in range(len(val_images)):
         result = predictor(val_images[i], text_prompt=TEXT_PROMPT, threshold=args.threshold)
-        if result["masks"] is None or result["scores"] is None:
+        best, best_score = _extract_best(result)
+        if best is None:
             dice_scores.append(0.0)
+            buf.append({"pred": None, "score": None, "img": result.get("image")})
+            print(f"  val {i:3d}: dice=0.0000  (no detections)")
             continue
-        best = result["masks"][int(result["scores"].argmax())].astype(bool)
-        gt = val_masks[i].astype(bool)
-        if best.shape != gt.shape:
-            gt_resized = np.array(
-                PILImage.fromarray(gt.astype(np.uint8)).resize(
-                    (best.shape[1], best.shape[0]), PILImage.NEAREST
-                ),
-                dtype=bool,
-            )
-        else:
-            gt_resized = gt
-        d = _dice(best, gt_resized)
+        gt_resized = resize_mask(val_masks[i], best.shape)
+        d = dice_score(best, gt_resized)
         dice_scores.append(d)
+        buf.append({"pred": best, "score": best_score, "img": result.get("image")})
+        print(f"  val {i:3d}: dice={d:.4f}  detections={result['num_detections']}")
 
-        if i < args.n_overlays:
-            out_path = OUT_DIR / f"sam3_{tag}_val_{i:03d}_overlay.png"
-            _save_overlay(result, out_path)
-            print(f"  val {i:3d}: dice={d:.4f}  detections={result['num_detections']}"
-                  f"  overlay={out_path.name}")
-        else:
-            print(f"  val {i:3d}: dice={d:.4f}  detections={result['num_detections']}")
+    # --- write overlays ---------------------------------------------------
+    overlays_dir = args.save_overlays_dir if args.save_overlays_dir else OUT_DIR
+    try:
+        save_indices = resolve_save_indices(dice_scores, _parse_n(args.save_overlays_n))
+    except ValueError as e:
+        print(f"[eval] skipping overlays: {e}")
+        save_indices = []
+    for i in save_indices:
+        b = buf[i]
+        parts = [f"sam3_{tag}_val_{i:03d}", f"dice{dice_scores[i]:.3f}"]
+        if b["score"] is not None:
+            parts.append(f"score{b['score']:.3f}")
+        out_path = overlays_dir / ("_".join(parts) + ".png")
+        save_overlay(
+            b["img"] if b["img"] is not None else val_images[i],
+            val_masks[i],
+            b["pred"],
+            out_path,
+            dice=dice_scores[i],
+            score=b["score"],
+            title=f"SAM3/{tag} · val[{i}]",
+        )
+    if save_indices:
+        print(f"[eval] wrote {len(save_indices)} overlay(s) to {overlays_dir}")
 
     ds = np.array(dice_scores)
     print(f"\n[eval] summary ({tag})")
@@ -195,7 +212,15 @@ def main() -> int:
     for img_path in (Path(p) for p in args.images):
         result = predictor(img_path, text_prompt=TEXT_PROMPT, threshold=args.threshold)
         print(f"[extra] {img_path.name} — detections: {result['num_detections']}")
-        _save_overlay(result, OUT_DIR / f"sam3_{tag}_{img_path.stem}_overlay.png")
+        best, best_score = _extract_best(result)
+        save_overlay(
+            result["image"],
+            None,
+            best,
+            overlays_dir / f"sam3_{tag}_{img_path.stem}_overlay.png",
+            score=best_score,
+            title=f"SAM3/{tag} · {img_path.name}",
+        )
 
     return 0
 

@@ -27,6 +27,8 @@ from typing import Optional, Sequence
 import numpy as np
 from tqdm import tqdm
 
+from impact_team_2.visual.utils import dice_score, resize_mask, summarize_dice
+
 
 Model = str   # "SAM" | "MedSAM"
 Mode = str    # "not_finetuned" | "finetuned"
@@ -57,14 +59,12 @@ def clear_cache() -> None:
     hold onto VRAM while the next phase builds fresh ones.
     """
     import gc
+    import torch
+
     _predictor_cache.clear()
     gc.collect()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except ImportError:
-        pass
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _medsam_finetuned_checkpoint() -> Path:
@@ -153,28 +153,6 @@ def predict(
 # Public: evaluate
 # ---------------------------------------------------------------------------
 
-def _dice(pred: np.ndarray, gt: np.ndarray) -> float:
-    pred = pred.astype(bool)
-    gt = gt.astype(bool)
-    inter = np.logical_and(pred, gt).sum()
-    denom = pred.sum() + gt.sum()
-    if denom == 0:
-        return 0.0
-    return float(2 * inter / (denom + 1e-8))
-
-
-def _resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
-    if mask.shape == shape:
-        return mask
-    from PIL import Image as PILImage
-    return np.array(
-        PILImage.fromarray(mask.astype(np.uint8)).resize(
-            (shape[1], shape[0]), PILImage.NEAREST
-        ),
-        dtype=bool,
-    )
-
-
 def evaluate(
     *,
     model_list: Sequence[Model],
@@ -183,12 +161,24 @@ def evaluate(
     modes: Sequence[Mode] = ("not_finetuned",),
     prompt: str = "object",
     threshold: float = 0.01,
+    save_overlays_dir: Optional[Path] = None,
+    save_overlays_n: "int | str" = 0,
 ) -> dict:
     """Evaluate one or more (model, mode) combinations.
 
     The caller is responsible for passing held-out / external data. Returns
     a nested dict keyed by ``"<model>/<mode>"`` strings, each containing
     per-image dice scores and a summary.
+
+    If ``save_overlays_dir`` is set, a 4-panel overlay PNG
+    (image | GT | pred | diff) is written per selected val image. Selection
+    is controlled by ``save_overlays_n``:
+
+      * ``0``              — save nothing (default)
+      * ``int N``          — save the first N val images
+      * ``"all"``          — save every val image
+      * ``"worst:K"``      — save the K lowest-dice images
+      * ``"best:K"``       — save the K highest-dice images
     """
     if images.shape[0] != ground_truth.shape[0]:
         raise ValueError("images and ground_truth must have the same length")
@@ -204,6 +194,9 @@ def evaluate(
                 f"unknown mode {mode!r}; expected one of {_SUPPORTED_MODES}"
             )
 
+    save_enabled = save_overlays_dir is not None and save_overlays_n != 0
+    overlays_root = Path(save_overlays_dir) if save_enabled else None
+
     results: dict[str, dict] = {}
     n = images.shape[0]
 
@@ -214,6 +207,10 @@ def evaluate(
             dice_scores: list[float] = []
             all_scores: list[float] = []
             per_image: dict[int, dict] = {}
+            # Minimal per-image payload we need to render overlays at the end.
+            # Keeping only `pred_mask`, `score`, and the PIL image from the
+            # predictor output — the full `out` dict lives in `per_image`.
+            overlay_buf: list[dict] = []
 
             for i in tqdm(range(n), desc=key):
                 out = pred_fn(images[i], prompt, threshold=threshold)
@@ -224,36 +221,75 @@ def evaluate(
                 pred_mask = _best_mask(out)
                 if pred_mask is None:
                     dice_scores.append(0.0)
+                    if save_enabled:
+                        overlay_buf.append({"pred": None, "score": None, "img": out.get("image")})
                     continue
-                gt = _resize_mask(ground_truth[i].astype(bool), pred_mask.shape)
-                dice_scores.append(_dice(pred_mask, gt))
+                gt = resize_mask(ground_truth[i].astype(bool), pred_mask.shape)
+                dice_scores.append(dice_score(pred_mask, gt))
+                if save_enabled:
+                    scores_arr = out.get("scores")
+                    best_score = (
+                        float(scores_arr[int(scores_arr.argmax())])
+                        if scores_arr is not None else None
+                    )
+                    overlay_buf.append({
+                        "pred": pred_mask,
+                        "score": best_score,
+                        "img": out.get("image"),
+                    })
+
+            if save_enabled:
+                _write_overlays(
+                    out_dir=overlays_root / key.replace("/", "_"),
+                    tag=key,
+                    images=images,
+                    ground_truth=ground_truth,
+                    dice_scores=dice_scores,
+                    overlay_buf=overlay_buf,
+                    how=save_overlays_n,
+                )
 
             results[key] = {
                 "results": per_image,
                 "dice": dice_scores,
                 "all_scores": all_scores,
-                "summary": _summarize(dice_scores, all_scores),
+                "summary": summarize_dice(dice_scores, all_scores),
             }
 
     return results
 
 
-def _summarize(
-    dice_scores: Sequence[float], scores: Sequence[float]
-) -> dict:
-    out: dict = {
-        "n": len(dice_scores),
-        "mean_dice": float(np.mean(dice_scores)) if dice_scores else 0.0,
-        "max_dice": float(np.max(dice_scores)) if dice_scores else 0.0,
-        "min_dice": float(np.min(dice_scores)) if dice_scores else 0.0,
-        "dice_gt_0.5": int(sum(1 for d in dice_scores if d > 0.5)),
-        "dice_gt_0.3": int(sum(1 for d in dice_scores if d > 0.3)),
-    }
-    if len(scores) > 0:
-        out["score_min"] = float(np.min(scores))
-        out["score_max"] = float(np.max(scores))
-        out["score_mean"] = float(np.mean(scores))
-    return out
+def _write_overlays(
+    *,
+    out_dir: Path,
+    tag: str,
+    images: np.ndarray,
+    ground_truth: np.ndarray,
+    dice_scores: list[float],
+    overlay_buf: list[dict],
+    how: "int | str",
+) -> None:
+    from impact_team_2.visual.overlays import save_overlay, resolve_save_indices
+
+    indices = resolve_save_indices(dice_scores, how)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_tag = tag.replace("/", "_")
+    for i in indices:
+        buf = overlay_buf[i]
+        base_img = buf["img"] if buf["img"] is not None else images[i]
+        parts = [f"{safe_tag}_val_{i:03d}", f"dice{dice_scores[i]:.3f}"]
+        if buf["score"] is not None:
+            parts.append(f"score{buf['score']:.3f}")
+        fname = "_".join(parts) + ".png"
+        save_overlay(
+            base_img,
+            ground_truth[i],
+            buf["pred"],
+            out_dir / fname,
+            dice=dice_scores[i],
+            score=buf["score"],
+            title=f"{tag} · val[{i}]",
+        )
 
 
 __all__ = ["predict", "evaluate", "clear_cache"]

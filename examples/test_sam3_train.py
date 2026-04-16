@@ -26,10 +26,9 @@ from pathlib import Path
 
 from safetensors.torch import load_file
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _data import load_spleen_data  # noqa: E402
+from _data import load_spleen_data
 
-from impact_team_2.train.sam import train_sam  # noqa: E402
+from impact_team_2.train.sam import train_sam
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

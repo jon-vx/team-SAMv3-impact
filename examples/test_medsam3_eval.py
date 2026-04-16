@@ -7,8 +7,6 @@ validation split, plots the per-image grids and the training loss curves,
 prints the dice summaries side by side, and surfaces the worst failure cases
 of the fine-tuned model.
 
-If the fine-tuned checkpoint isn't present yet, the baseline-only path runs
-and the script tells you what's missing.
 """
 
 from pathlib import Path

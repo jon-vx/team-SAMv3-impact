@@ -10,14 +10,12 @@ Held-out discipline is the caller's job: we split train/val with a fixed seed
 and only ever train on `train_idx`, only ever evaluate on `val_idx`.
 """
 
-import sys
 from pathlib import Path
 
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _data import load_spleen_data  # noqa: E402
+from _data import load_spleen_data
 
 import impact_team_2 as I  # noqa: E402
 from impact_team_2.train import train_medsam3

@@ -34,16 +34,19 @@ from impact_team_2.vendor.medsam3.lora_layers import (
     load_lora_weights,
 )
 
+_BPE_URL = "https://raw.githubusercontent.com/facebookresearch/sam3/main/sam3/assets/bpe_simple_vocab_16e6.txt.gz"
 _BPE_PATH = Path(sam3.__file__).parent / "assets" / "bpe_simple_vocab_16e6.txt.gz"
-if not _BPE_PATH.exists():
-    import urllib.request
-    _BPE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading missing BPE vocab -> {_BPE_PATH}")
-    urllib.request.urlretrieve(
-        "https://raw.githubusercontent.com/facebookresearch/sam3/main/sam3/assets/bpe_simple_vocab_16e6.txt.gz",
-        _BPE_PATH,
-    )
-_BPE_PATH = str(_BPE_PATH)
+
+
+def _ensure_bpe_vocab() -> str:
+    if not _BPE_PATH.exists():
+        import urllib.request
+        _BPE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Downloading missing BPE vocab -> {_BPE_PATH}")
+        urllib.request.urlretrieve(_BPE_URL, _BPE_PATH)
+    return str(_BPE_PATH)
+
+
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _RESOLUTION = 1008
 
@@ -170,7 +173,7 @@ def build_predictor(lora_weights_path: Optional[PathLike] = None) -> PredictFn:
     model = build_sam3_image_model(
         device=str(_DEVICE),
         load_from_HF=True,
-        bpe_path=_BPE_PATH,
+        bpe_path=_ensure_bpe_vocab(),
         eval_mode=True,
     )
     model = apply_lora_to_model(
