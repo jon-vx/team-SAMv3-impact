@@ -81,6 +81,13 @@ def _build_predictor(model: Model, mode: Mode) -> PredictFn:
     if key in _predictor_cache:
         return _predictor_cache[key]
 
+    # Cache miss — we're about to load a new predictor. Evict any predictors
+    # already cached for different (model, mode) pairs so only one is resident
+    # at a time. Keeps multi-model work (evaluate / alternating predict calls)
+    # within the memory of a single predictor on constrained GPUs.
+    if _predictor_cache:
+        clear_cache()
+
     if model == "MedSAM":
         from impact_team_2.inference._inference_medsam3 import build_predictor
         if mode == "not_finetuned":
@@ -190,6 +197,13 @@ def evaluate(
     The caller is responsible for passing held-out / external data. Returns
     a nested dict keyed by ``"<model>/<mode>"`` strings, each containing
     per-image dice scores and a summary.
+
+    Only one predictor is resident on the GPU at a time: whenever a new
+    ``(model, mode)`` is requested that isn't already cached, the existing
+    cache is evicted and ``torch.cuda.empty_cache()`` is called before the
+    new predictor is built. Multi-model evaluations therefore stay within
+    the memory of a single model, at the cost of rebuilding between
+    combinations.
 
     If ``save_overlays_dir`` is set, a 4-panel overlay PNG
     (image | GT | pred | diff) is written per selected val image. Selection
