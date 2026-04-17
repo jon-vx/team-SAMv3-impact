@@ -12,16 +12,10 @@ from matplotlib.figure import Figure
 from PIL import Image as PILImage
 from tqdm import tqdm
 
-from impact_team_2.visual.utils import dice_score, resize_mask, summarize_dice
+from impact_team_2.visual.utils import best_mask, dice_score, resize_mask, summarize_dice
 
 
 PredictFn = Callable[..., dict]
-
-
-def _best_pred_mask(result: dict) -> Optional[np.ndarray]:
-    if result.get("masks") is None or result.get("scores") is None:
-        return None
-    return result["masks"][int(result["scores"].argmax())]
 
 
 # ---------------------------------------------------------------------------
@@ -71,14 +65,14 @@ def plot_prediction_grid(
         axes[row, 1].axis("off")
 
         axes[row, 2].imshow(result["image"])
-        pred_mask = _best_pred_mask(result)
+        pred_mask = best_mask(result)
         if pred_mask is not None:
             gt_for_dice = resize_mask(gt, pred_mask.shape)
             d = dice_score(pred_mask, gt_for_dice)
             dice_scores.append(d)
 
             pred_overlay = np.zeros((*pred_mask.shape, 4))
-            pred_overlay[pred_mask.astype(bool)] = [1, 0, 0, 0.4]
+            pred_overlay[pred_mask] = [1, 0, 0, 0.4]
             axes[row, 2].imshow(pred_overlay)
             top_score = float(result["scores"].max())
             axes[row, 2].set_title(
@@ -245,7 +239,7 @@ def evaluate(
     dice_scores: list[float] = []
     for idx in indices:
         result = results[idx]
-        pred_mask = _best_pred_mask(result)
+        pred_mask = best_mask(result)
         if pred_mask is None:
             dice_scores.append(0.0)
             continue

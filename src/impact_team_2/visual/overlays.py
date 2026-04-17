@@ -22,6 +22,23 @@ from impact_team_2.visual.utils import resize_mask
 PathLike = Union[str, Path]
 ImageLike = Union[np.ndarray, "PILImage.Image"]  # noqa: F821
 
+# RGBA fills used across all three overlay renderers. Pred and GT fills share
+# one alpha so cross-renderer screenshots look consistent; diff panels use a
+# higher alpha so TP/FN/FP stand out against the image.
+_GT_RGBA = [0, 1, 0, 0.45]
+_PRED_RGBA = [1, 0, 1, 0.45]
+_DIFF_TP_RGBA = [0, 1, 0, 0.5]
+_DIFF_FN_RGBA = [1, 0, 0, 0.5]
+_DIFF_FP_RGBA = [0, 0.4, 1, 0.5]
+
+
+def _smooth_mask(mask: np.ndarray, radius: float = 1.2) -> np.ndarray:
+    """Gaussian-smooth a bool mask into a float field for contouring."""
+    from PIL import Image as PILImage, ImageFilter
+    arr = (mask.astype(np.uint8) * 255)
+    blurred = PILImage.fromarray(arr).filter(ImageFilter.GaussianBlur(radius=radius))
+    return np.asarray(blurred, dtype=np.float32) / 255.0
+
 
 def _to_rgb_uint8(image: ImageLike) -> np.ndarray:
     from PIL import Image as PILImage
@@ -85,13 +102,13 @@ def save_overlay(
     axes[1].set_title("GT")
     if gt is not None:
         overlay = np.zeros((h, w, 4))
-        overlay[gt] = [0, 1, 0, 0.45]
+        overlay[gt] = _GT_RGBA
         axes[1].imshow(overlay)
 
     axes[2].set_title("pred")
     if pr is not None:
         overlay = np.zeros((h, w, 4))
-        overlay[pr] = [1, 0, 1, 0.45]
+        overlay[pr] = _PRED_RGBA
         axes[2].imshow(overlay)
 
     axes[3].set_title("diff (TP=green, FN=red, FP=blue)")
@@ -100,9 +117,9 @@ def save_overlay(
         tp = gt & pr
         fn = gt & ~pr
         fp = ~gt & pr
-        diff[tp] = [0, 1, 0, 0.5]
-        diff[fn] = [1, 0, 0, 0.5]
-        diff[fp] = [0, 0.4, 1, 0.5]
+        diff[tp] = _DIFF_TP_RGBA
+        diff[fn] = _DIFF_FN_RGBA
+        diff[fp] = _DIFF_FP_RGBA
         axes[3].imshow(diff)
 
     out_path = Path(out_path)
@@ -198,7 +215,7 @@ def save_comparison_overlay(
     axes[1, 0].set_title("GT")
     if gt is not None:
         gt_overlay = np.zeros((h, w, 4))
-        gt_overlay[gt] = [0, 1, 0, 0.45]
+        gt_overlay[gt] = _GT_RGBA
         axes[1, 0].imshow(gt_overlay)
 
     def _render_pred(ax, pred_mask, model_name, row_label, dice):
@@ -209,7 +226,7 @@ def save_comparison_overlay(
         ax.set_title(t, fontsize=9)
         if pr is not None:
             pr_overlay = np.zeros((h, w, 4))
-            pr_overlay[pr] = [1, 0, 1, 0.45]
+            pr_overlay[pr] = _PRED_RGBA
             ax.imshow(pr_overlay)
 
     for j, model in enumerate(models, start=1):
@@ -277,12 +294,14 @@ def save_contact_sheet(
         if pred_masks[i] is not None:
             pr = resize_mask(pred_masks[i], (h, w))
             pr_overlay = np.zeros((h, w, 4))
-            pr_overlay[pr] = [1, 0, 1, 0.40]
+            pr_overlay[pr] = _PRED_RGBA
             ax.imshow(pr_overlay)
 
         if gt_masks[i] is not None:
             gt = resize_mask(gt_masks[i], (h, w))
-            ax.contour(gt.astype(float), levels=[0.5], colors=["#66ff66"], linewidths=0.8)
+            # Gaussian-smooth before contouring so the 0.5 isoline isn't
+            # stair-stepped along pixel boundaries of the binary mask.
+            ax.contour(_smooth_mask(gt), levels=[0.5], colors=["#66ff66"], linewidths=0.8)
 
         if dice_scores is not None and i < len(dice_scores):
             ax.set_title(f"[{i}] dice={dice_scores[i]:.3f}", fontsize=8)

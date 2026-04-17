@@ -175,7 +175,8 @@ from impact_team_2.inference import build_predictor
 from impact_team_2.visual import (
     evaluate, show_prediction_grid, show_training_curves,
     worst_dice, best_dice,
-    save_overlay, dice_score,
+    save_overlay, save_comparison_overlay, save_contact_sheet,
+    dice_score,
 )
 
 predictor = build_predictor("runs/medsam3_finetune/best_lora_weights.pt")
@@ -189,7 +190,29 @@ show_prediction_grid(images, masks, worst_dice(out, k=5), title="Worst dice")
 # Ad-hoc 4-panel overlay (image | GT | pred | diff) for a single case
 save_overlay(images[0], masks[0], pred_mask, "runs/overlay.png",
              dice=dice_score(pred_mask, masks[0]), title="val[0]")
+
+# Per-image baseline-vs-finetuned grid across multiple models
+save_comparison_overlay(
+    images[0], masks[0],
+    baseline_preds={"SAM": sam_base_pred, "MedSAM": med_base_pred},
+    finetuned_preds={"SAM": sam_ft_pred, "MedSAM": med_ft_pred},
+    out_path="runs/compare/val0.png",
+    baseline_dice={"SAM": 0.71, "MedSAM": 0.78},
+    finetuned_dice={"SAM": 0.84, "MedSAM": 0.86},
+)
+
+# Dataset-wide contact sheet — one tile per val image for a single (model, mode)
+save_contact_sheet(
+    images, masks, [r["mask"] for r in out["results"]],
+    out_path="runs/contact/medsam_finetuned.png",
+    dice_scores=out["dice"], cols=7, title="MedSAM finetuned",
+)
 ```
+
+Three complementary views: `save_overlay` for one case, `save_comparison_overlay`
+for cross-model sanity checks on a single image, and `save_contact_sheet` for
+spotting failure patterns across the whole val split at a glance.
+`examples/test_api.py` wires all three into the end-to-end run.
 
 ## Examples
 

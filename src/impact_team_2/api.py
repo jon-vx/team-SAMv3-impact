@@ -27,7 +27,7 @@ from typing import Callable, Literal, Optional, Sequence, overload
 import numpy as np
 from tqdm import tqdm
 
-from impact_team_2.visual.utils import dice_score, resize_mask, summarize_dice
+from impact_team_2.visual.utils import best_mask, dice_score, resize_mask, summarize_dice
 
 
 Model = str   # "SAM" | "MedSAM"
@@ -49,7 +49,7 @@ _SUPPORTED_MODES = ("not_finetuned", "finetuned")
 # Predictor resolution
 # ---------------------------------------------------------------------------
 
-_predictor_cache: dict[tuple[Model, Mode], PredictFn] = {}
+_predictor_cache: dict[tuple[Model, Mode, bool], PredictFn] = {}
 
 
 def clear_cache() -> None:
@@ -76,8 +76,8 @@ def _sam_finetuned_checkpoint() -> Path:
     return SAM_FINETUNED_DIR / "sam3_finetuned_weights.safetensors"
 
 
-def _build_predictor(model: Model, mode: Mode) -> PredictFn:
-    key = (model, mode)
+def _build_predictor(model: Model, mode: Mode, sam_use_unet: bool = True) -> PredictFn:
+    key = (model, mode, sam_use_unet)
     if key in _predictor_cache:
         return _predictor_cache[key]
 
@@ -99,7 +99,9 @@ def _build_predictor(model: Model, mode: Mode) -> PredictFn:
             pred = build_predictor(ckpt)
     elif model == "SAM":
         from impact_team_2.inference._inference_sam3 import build_predictor
-        unet_weights = _UNET_WEIGHTS if _UNET_WEIGHTS.exists() else None
+        unet_weights = (
+            _UNET_WEIGHTS if sam_use_unet and _UNET_WEIGHTS.exists() else None
+        )
         if mode == "not_finetuned":
             pred = build_predictor(unet_weights=unet_weights)
         else:
@@ -121,12 +123,6 @@ def _build_predictor(model: Model, mode: Mode) -> PredictFn:
 # Public: predict
 # ---------------------------------------------------------------------------
 
-def _best_mask(result: dict) -> Optional[np.ndarray]:
-    if result.get("masks") is None or result.get("scores") is None:
-        return None
-    return result["masks"][int(result["scores"].argmax())].astype(bool)
-
-
 @overload
 def predict(
     image,
@@ -135,6 +131,7 @@ def predict(
     model: Model = ...,
     mode: Mode = ...,
     threshold: float = ...,
+    sam_use_unet: bool = ...,
     return_details: Literal[False] = False,
 ) -> Optional[np.ndarray]: ...
 @overload
@@ -145,6 +142,7 @@ def predict(
     model: Model = ...,
     mode: Mode = ...,
     threshold: float = ...,
+    sam_use_unet: bool = ...,
     return_details: Literal[True],
 ) -> dict: ...
 def predict(
@@ -154,24 +152,26 @@ def predict(
     model: Model = "MedSAM",
     mode: Mode = "not_finetuned",
     threshold: float = 0.5,
+    sam_use_unet: bool = False,
     return_details: bool = False,
 ):
     """Run a single-image prediction.
 
     Returns the best predicted mask as a bool ndarray by default. Pass
     ``return_details=True`` to get the full backend dict (boxes, all scores,
-    all masks, etc.).
+    all masks, etc.). ``sam_use_unet`` mirrors the flag on ``evaluate`` —
+    pass ``True`` to route SAM through its UNet-cascade prompt path.
     """
     if model not in _SUPPORTED_MODELS:
         raise ValueError(f"unknown model {model!r}; expected one of {_SUPPORTED_MODELS}")
     if mode not in _SUPPORTED_MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of {_SUPPORTED_MODES}")
 
-    pred_fn = _build_predictor(model, mode)
+    pred_fn = _build_predictor(model, mode, sam_use_unet=sam_use_unet)
     result = pred_fn(image, prompt, threshold=threshold)
     if return_details:
         return result
-    return _best_mask(result)
+    return best_mask(result)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +188,7 @@ def evaluate(
     threshold: float = 0.01,
     save_overlays_dir: Optional[Path] = None,
     save_overlays_n: "int | str" = 0,
+    sam_use_unet: bool = False,
 ) -> dict:
     """Evaluate one or more (model, mode) combinations.
 
@@ -208,6 +209,11 @@ def evaluate(
       * ``"all"``          — save every val image
       * ``"worst:K"``      — save the K lowest-dice images
       * ``"best:K"``       — save the K highest-dice images
+
+    ``sam_use_unet=False`` disables the UNet-cascade prompting for SAM, so
+    SAM receives text only — matching the default MedSAM prompting regime.
+    Use this for apples-to-apples SAM-vs-MedSAM comparisons, or when running
+    on a dataset the UNet was not trained for. No effect on MedSAM.
     """
     if images.shape[0] != ground_truth.shape[0]:
         raise ValueError("images and ground_truth must have the same length")
@@ -238,7 +244,7 @@ def evaluate(
             # Python evaluates the RHS first, so without this the old pred_fn
             # is still alive during cache eviction and its VRAM can't be freed.
             pred_fn = None
-            pred_fn = _build_predictor(model, mode)
+            pred_fn = _build_predictor(model, mode, sam_use_unet=sam_use_unet)
             key = f"{model}/{mode}"
             dice_scores: list[float] = []
             all_scores: list[float] = []
@@ -254,7 +260,7 @@ def evaluate(
                 if out.get("scores") is not None:
                     all_scores.extend(out["scores"].tolist())
 
-                pred_mask = _best_mask(out)
+                pred_mask = best_mask(out)
                 if pred_mask is None:
                     dice_scores.append(0.0)
                     if overlays_root is not None:

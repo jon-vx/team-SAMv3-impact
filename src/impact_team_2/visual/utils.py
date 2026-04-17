@@ -13,6 +13,18 @@ import numpy as np
 from PIL import Image as PILImage
 
 
+def best_mask(result: dict) -> Optional[np.ndarray]:
+    """Return the highest-scoring mask from a predictor result as a bool array.
+
+    `result` is the dict returned by MedSAM3 / SAM3 predictors — ``masks`` of
+    shape (N, H, W) and ``scores`` of shape (N,). Returns None if either is
+    missing, e.g. when the model produced no detections.
+    """
+    if result.get("masks") is None or result.get("scores") is None:
+        return None
+    return result["masks"][int(result["scores"].argmax())].astype(bool)
+
+
 def dice_score(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
     """Binary dice coefficient. Operates on bool / 0-1 arrays of the same shape."""
     pred_mask = pred_mask.astype(bool)
@@ -68,4 +80,4 @@ def summarize_dice(
     return out
 
 
-__all__ = ["dice_score", "resize_mask", "summarize_dice"]
+__all__ = ["best_mask", "dice_score", "resize_mask", "summarize_dice"]

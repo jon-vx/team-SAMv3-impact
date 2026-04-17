@@ -59,6 +59,7 @@ baseline = I.evaluate(
     threshold=0.5,
     save_overlays_dir=OVERLAY_DIR,
     save_overlays_n="all",
+    sam_use_unet=False,
 )
 for key, res in baseline.items():
     all_summaries[key] = res["summary"]
@@ -102,6 +103,7 @@ finetuned = I.evaluate(
     threshold=0.5,
     save_overlays_dir=OVERLAY_DIR,
     save_overlays_n="all",
+    sam_use_unet=False,
 )
 for key, res in finetuned.items():
     all_summaries[key] = res["summary"]
@@ -136,13 +138,7 @@ for model in ("SAM", "MedSAM"):
 
 
 # --- 6. per-image comparison + contact sheets -----------------------------
-from impact_team_2.visual import save_comparison_overlay, save_contact_sheet
-
-
-def _best(res_i: dict):
-    if res_i.get("masks") is None or res_i.get("scores") is None:
-        return None
-    return res_i["masks"][int(res_i["scores"].argmax())].astype(bool)
+from impact_team_2.visual import best_mask, save_comparison_overlay, save_contact_sheet
 
 
 models = ("SAM", "MedSAM")
@@ -150,8 +146,8 @@ n_val = len(val_images)
 
 print(f"\n### 5. Writing per-image comparisons -> {COMPARISON_DIR.name}/ ({n_val} files)")
 for i in range(n_val):
-    baseline_preds = {m: _best(baseline[f"{m}/not_finetuned"]["results"][i]) for m in models}
-    finetuned_preds = {m: _best(finetuned[f"{m}/finetuned"]["results"][i]) for m in models}
+    baseline_preds = {m: best_mask(baseline[f"{m}/not_finetuned"]["results"][i]) for m in models}
+    finetuned_preds = {m: best_mask(finetuned[f"{m}/finetuned"]["results"][i]) for m in models}
     baseline_dice_i = {m: baseline[f"{m}/not_finetuned"]["dice"][i] for m in models}
     finetuned_dice_i = {m: finetuned[f"{m}/finetuned"]["dice"][i] for m in models}
     save_comparison_overlay(
@@ -168,7 +164,7 @@ for phase_dict, suffix in ((baseline, "not_finetuned"), (finetuned, "finetuned")
     for model in models:
         key = f"{model}/{suffix}"
         res = phase_dict[key]
-        preds = [_best(res["results"][i]) for i in range(n_val)]
+        preds = [best_mask(res["results"][i]) for i in range(n_val)]
         save_contact_sheet(
             images=list(val_images),
             gt_masks=list(val_masks),
