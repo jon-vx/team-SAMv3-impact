@@ -58,7 +58,7 @@ _, val_idx = train_test_split(
 predictor = build_predictor(best_weights)
 eval_out = evaluate(
     predictor, images, masks, val_idx,
-    prompt="spleen", threshold=0.01, desc="fine-tuned eval",
+    prompt="spleen", threshold=0.5, desc="fine-tuned eval",
 )
 
 print("\n=== Fine-tuned evaluation ===")

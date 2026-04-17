@@ -212,35 +212,41 @@ save_contact_sheet(
 Three complementary views: `save_overlay` for one case, `save_comparison_overlay`
 for cross-model sanity checks on a single image, and `save_contact_sheet` for
 spotting failure patterns across the whole val split at a glance.
-`examples/test_api.py` wires all three into the end-to-end run.
+`examples/demo_api.py` wires all three into the end-to-end run.
 
 ## Examples
 
-| Script                        | What it does                                                                                                            |
-|-------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `examples/test_medsam3_inf.py`   | Run baseline MedSAM3 over the spleen val split, plot the prediction grid.                                            |
-| `examples/test_medsam3_train.py` | Download the public ultrasound spleen dataset and fine-tune MedSAM3 on it.                                           |
-| `examples/test_medsam3_eval.py`  | Full before/after loop for MedSAM3: baseline vs fine-tuned, plus loss curves and worst-case grid.                    |
-| `examples/test_sam3_train.py`    | Fine-tune SAM3 on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                |
-| `examples/test_sam3_inf.py`      | Evaluate SAM3 on the spleen val split (baseline or fine-tuned), report per-image dice + summary, save 4-panel (image \| GT \| pred \| diff) overlays — pick which to save via `--save-overlays-n {N \| all \| worst:K \| best:K}`. |
-| `examples/test_api.py`           | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.              |
+| Script                           | What it does                                                                                                            |
+|----------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `examples/demo_api_predict.py`   | Single-image `I.predict` showcase: run both models on one image, write 4-panel overlays.                                |
+| `examples/demo_medsam3_inf.py`   | `I.evaluate` baseline MedSAM3 over the spleen val split; saves worst-5 overlays.                                        |
+| `examples/demo_medsam3_train.py` | Download the public ultrasound spleen dataset and fine-tune MedSAM3 on it.                                              |
+| `examples/demo_medsam3_eval.py`  | `I.evaluate` baseline vs fine-tuned MedSAM3, plus loss curves and worst-case grid.                                      |
+| `examples/demo_sam3_train.py`    | Fine-tune SAM3 on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                       |
+| `examples/demo_sam3_inf.py`      | `I.evaluate` baseline SAM3 over the spleen val split (text-only prompting by default).                                  |
+| `examples/demo_sam3_unet_cascade.py` | SAM3 baseline (text-only) → train UNet++ bbox generator → SAM3 with UNet cascade, side-by-side summary. |
+| `examples/demo_api.py`           | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.                 |
 
 ```bash
+# Single-image predict (quickest smoke test)
+venv/bin/python examples/demo_api_predict.py
+
 # MedSAM3 flow
-venv/bin/python examples/test_medsam3_train.py    # train (writes runs/medsam3_finetune/)
-venv/bin/python examples/test_medsam3_eval.py     # plot before/after
+venv/bin/python examples/demo_medsam3_train.py    # train (writes runs/medsam3_finetune/)
+venv/bin/python examples/demo_medsam3_eval.py     # plot before/after
 
 # SAM3 flow
-venv/bin/python examples/test_sam3_train.py                          # text-only, 10 epochs (default)
-venv/bin/python examples/test_sam3_train.py --box-source unet \
+venv/bin/python examples/demo_sam3_unet_cascade.py                   # text-only → train UNet → SAM3+UNet cascade
+venv/bin/python examples/demo_sam3_train.py                          # text-only, 10 epochs (default)
+venv/bin/python examples/demo_sam3_train.py --box-source unet \
     --unet checkpoints/best_unetp.weights.h5                         # detect-then-segment
-venv/bin/python examples/test_sam3_train.py --box-source gt          # GT-box upper bound
-venv/bin/python examples/test_sam3_train.py --n 32 --epochs 2        # quick sanity run
+venv/bin/python examples/demo_sam3_train.py --box-source gt          # GT-box upper bound
+venv/bin/python examples/demo_sam3_train.py --n 32 --epochs 2        # quick sanity run
 
-venv/bin/python examples/test_sam3_inf.py --no-unet                  # text-only eval (matches default training)
-venv/bin/python examples/test_sam3_inf.py                            # UNet cascade eval
-venv/bin/python examples/test_sam3_inf.py --weights runs/sam3_finetune/sam3_finetuned_weights.safetensors --no-unet
-venv/bin/python examples/test_sam3_inf.py --train                    # retrain UNet bbox generator first
+venv/bin/python examples/demo_sam3_inf.py                            # text-only baseline eval
+
+# Unified API end-to-end
+venv/bin/python examples/demo_api.py
 ```
 
 

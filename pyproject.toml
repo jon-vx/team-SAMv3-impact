@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Vendor UNet bbox generator (INIA) — only needed for the SAM3 auto-bbox path
-# (examples/test_sam3_inf.py and api.predict with unet_weights set).
+# (examples/demo_unet_train.py and api.predict with sam_use_unet=True).
 # tensorflow-metal is Apple-Silicon only; install it manually if you need it.
 unet = [
     "tensorflow",

@@ -185,7 +185,7 @@ def evaluate(
     ground_truth: np.ndarray,
     modes: Sequence[Mode] = ("not_finetuned",),
     prompt: str = "object",
-    threshold: float = 0.01,
+    threshold: "float | dict[Model, float]" = 0.5,
     save_overlays_dir: Optional[Path] = None,
     save_overlays_n: "int | str" = 0,
     sam_use_unet: bool = False,
@@ -209,6 +209,14 @@ def evaluate(
       * ``"all"``          — save every val image
       * ``"worst:K"``      — save the K lowest-dice images
       * ``"best:K"``       — save the K highest-dice images
+
+    ``threshold`` gates HF ``post_process_instance_segmentation`` by detection
+    confidence. Pass a float to apply it to every model, or a dict like
+    ``{"SAM": 0.01, "MedSAM": 0.5}`` to override per model. SAM3's text-path
+    detection head isn't updated by ``train_sam`` (only the mask decoder is),
+    so on out-of-vocab prompts like ``"spleen"`` SAM scores stay well below
+    0.5 and every mask gets filtered out; a low threshold lets those masks
+    through. MedSAM's scores are calibrated, so 0.5 is fine for it.
 
     ``sam_use_unet=False`` disables the UNet-cascade prompting for SAM, so
     SAM receives text only — matching the default MedSAM prompting regime.
@@ -234,11 +242,22 @@ def evaluate(
     else:
         overlays_root = None
 
+    if isinstance(threshold, dict):
+        missing = [m for m in model_list if m not in threshold]
+        if missing:
+            raise ValueError(
+                f"threshold dict is missing entries for: {missing}. "
+                f"Either add them or pass a float to apply one threshold to all."
+            )
+
     results: dict[str, dict] = {}
     n = images.shape[0]
 
     pred_fn: Optional[PredictFn] = None
     for model in model_list:
+        model_threshold = (
+            threshold[model] if isinstance(threshold, dict) else threshold
+        )
         for mode in modes:
             # Drop the prior predictor ref before _build_predictor runs —
             # Python evaluates the RHS first, so without this the old pred_fn
@@ -255,7 +274,7 @@ def evaluate(
             overlay_buf: list[dict] = []
 
             for i in tqdm(range(n), desc=key):
-                out = pred_fn(images[i], prompt, threshold=threshold)
+                out = pred_fn(images[i], prompt, threshold=model_threshold)
                 per_image[i] = out
                 if out.get("scores") is not None:
                     all_scores.extend(out["scores"].tolist())

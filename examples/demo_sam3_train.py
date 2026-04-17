@@ -12,10 +12,10 @@ Defaults run on the full dataset. After training, verifies the checkpoint is
 mask-decoder-only and that inference can load it.
 
 Run:
-    python examples/test_sam3_train.py                              # text-only
-    python examples/test_sam3_train.py --box-source unet --unet checkpoints/best_unetp.weights.h5
-    python examples/test_sam3_train.py --box-source gt              # GT-box baseline
-    python examples/test_sam3_train.py --n 32 --epochs 2            # quick smoke test
+    python examples/demo_sam3_train.py                              # text-only
+    python examples/demo_sam3_train.py --box-source unet --unet checkpoints/best_unetp.weights.h5
+    python examples/demo_sam3_train.py --box-source gt              # GT-box baseline
+    python examples/demo_sam3_train.py --n 32 --epochs 2            # quick smoke test
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def main() -> int:
         if not args.unet.exists():
             raise FileNotFoundError(
                 f"--box-source=unet needs a UNet checkpoint but {args.unet} doesn't exist. "
-                f"Train one first via test_sam3_inf.py --train, or pass --unet <path>."
+                f"Train one first via demo_sam3_unet_cascade.py, or pass --unet <path>."
             )
         unet_model = load_unet_weights(args.unet)
 
