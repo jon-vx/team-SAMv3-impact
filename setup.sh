@@ -1,111 +1,156 @@
 #!/usr/bin/env bash
-# Create a venv, install impact_team_2 + dependencies, and (if sourced) activate it.
+# Create/update the impact-team-2 conda env and (if sourced) activate it.
 #
 # Usage:
-#   source setup.sh        # creates/activates venv in current shell
-#   ./setup.sh             # creates venv, installs deps, then prints activation hint
+#   source setup.sh        # creates/updates env, activates it in this shell
+#   ./setup.sh             # creates/updates env, prints activation hint
 #
-# Re-running is safe: an existing venv is reused.
+# Re-running is safe: an existing env is updated in place.
+#
+# Platform behavior:
+#   - Linux + NVIDIA: uses environment.yml (torch 2.7/cu126 + TF 2.19 stack).
+#   - Apple Silicon: creates a Python-only env, then pip-installs MPS torch
+#     plus tensorflow-macos / tensorflow-metal.
+#   - Linux without nvidia-smi: creates a Python-only env, then pip-installs
+#     CPU torch + tensorflow-cpu.
 
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-VENV_DIR="${REPO_ROOT}/venv"
-PYTHON="${PYTHON:-python3.12}"
+ENV_FILE="${REPO_ROOT}/environment.yml"
+ENV_NAME="${CONDA_ENV_NAME:-impact-team-2}"
 
-if [ ! -d "${VENV_DIR}" ]; then
-    echo "[setup] creating venv at ${VENV_DIR} (using ${PYTHON})"
-    "${PYTHON}" -m venv "${VENV_DIR}"
-else
-    echo "[setup] reusing existing venv at ${VENV_DIR}"
+if ! command -v conda >/dev/null 2>&1; then
+    echo "[setup] conda not found on PATH — install Miniconda/Anaconda first." >&2
+    exit 1
 fi
 
-# Use the venv's pip directly so this works whether or not we're sourced.
-PIP="${VENV_DIR}/bin/pip"
-"${PIP}" install --upgrade pip
-
-# Detect CUDA version from the NVIDIA driver and install the matching PyTorch
-# wheel BEFORE the editable install, so the project's torch dep is already
-# satisfied by the right CUDA build. Falls back to the CPU wheel if no GPU.
-TORCH_INDEX=""
-TF_PIN=""
-TF_EXTRA=""
+# shellcheck disable=SC1091
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
 OS_NAME="$(uname -s)"
 ARCH_NAME="$(uname -m)"
 
+env_exists() {
+    conda env list | awk '{print $1}' | grep -qx "${ENV_NAME}"
+}
+
+create_or_update_from_yml() {
+    cd "${REPO_ROOT}"
+    if env_exists; then
+        echo "[setup] updating '${ENV_NAME}' from ${ENV_FILE}"
+        conda env update --name "${ENV_NAME}" --file "${ENV_FILE}" --prune
+    else
+        echo "[setup] creating '${ENV_NAME}' from ${ENV_FILE}"
+        conda env create --name "${ENV_NAME}" --file "${ENV_FILE}"
+    fi
+}
+
+create_python_only_env() {
+    if env_exists; then
+        echo "[setup] reusing existing '${ENV_NAME}'"
+    else
+        echo "[setup] creating '${ENV_NAME}' with python=3.12"
+        conda create --yes --name "${ENV_NAME}" --channel conda-forge python=3.12 pip
+    fi
+}
+
+pip_in_env() {
+    conda run --no-capture-output --name "${ENV_NAME}" python -m pip "$@"
+}
+
 if [ "${OS_NAME}" = "Darwin" ] && [ "${ARCH_NAME}" = "arm64" ]; then
-    echo "[setup] detected Apple Silicon (${OS_NAME}/${ARCH_NAME}) → MPS torch + tensorflow-macos/metal"
-    # Default PyPI torch wheel on macOS arm64 already supports MPS — no index override.
-    TF_PIN="tensorflow-macos==2.16.*"
-    TF_EXTRA="tensorflow-metal"
+    echo "[setup] Apple Silicon — MPS torch + tensorflow-macos/metal"
+    create_python_only_env
+    pip_in_env install --upgrade pip
+    pip_in_env install "torch>=2.7,<2.8" "torchvision>=0.22,<0.23"
+    pip_in_env install "tensorflow-macos==2.16.*" "tensorflow-metal"
+    pip_in_env install -e "${REPO_ROOT}[unet]"
 elif command -v nvidia-smi >/dev/null 2>&1; then
-    # NVIDIA drivers are forward-compatible across CUDA minors, so we standardize
-    # on cu126 for all 12.x drivers (torch 2.7.x ships this wheel). Older
-    # drivers (11.8/11.9) get cu118. Anything unmapped falls back to CPU.
+    # NVIDIA drivers are forward-compatible across CUDA minors; the working
+    # stack is cu126 for all 12.x drivers, cu118 for older drivers.
     CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: [0-9]+\.[0-9]+' | head -1 | awk '{print $3}')
     case "${CUDA_VER}" in
-        12.*) TORCH_INDEX="cu126" ;;
+        12.*)        TORCH_INDEX="cu126" ;;
         11.8*|11.9*) TORCH_INDEX="cu118" ;;
-        *)  echo "[setup] driver CUDA ${CUDA_VER:-unknown} unmapped — falling back to CPU torch"
-            TORCH_INDEX="cpu" ;;
+        *)           TORCH_INDEX="" ;;
     esac
-    TF_PIN="tensorflow==2.19.*"
-    if [ -n "${TORCH_INDEX}" ]; then
-        echo "[setup] driver CUDA ${CUDA_VER} → torch=${TORCH_INDEX}, tf=${TF_PIN}"
+    if [ "${TORCH_INDEX}" = "cu126" ]; then
+        echo "[setup] driver CUDA ${CUDA_VER} → using ${ENV_FILE} (cu126 + TF 2.19)"
+        create_or_update_from_yml
+    else
+        echo "[setup] driver CUDA ${CUDA_VER:-unknown} unmapped — creating env manually"
+        create_python_only_env
+        pip_in_env install --upgrade pip
+        if [ -n "${TORCH_INDEX}" ]; then
+            pip_in_env install --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" \
+                "torch>=2.7,<2.8" "torchvision>=0.22,<0.23"
+        else
+            pip_in_env install --index-url "https://download.pytorch.org/whl/cpu" \
+                "torch>=2.7,<2.8" "torchvision>=0.22,<0.23"
+        fi
+        pip_in_env install "tensorflow==2.19.*"
+        pip_in_env install -e "${REPO_ROOT}[unet]"
     fi
 else
-    TORCH_INDEX="cpu"
-    TF_PIN="tensorflow-cpu==2.19.*"
-    echo "[setup] no nvidia-smi found → installing CPU torch + CPU tensorflow"
+    echo "[setup] no nvidia-smi — CPU torch + tensorflow-cpu"
+    create_python_only_env
+    pip_in_env install --upgrade pip
+    pip_in_env install --index-url "https://download.pytorch.org/whl/cpu" \
+        "torch>=2.7,<2.8" "torchvision>=0.22,<0.23"
+    pip_in_env install "tensorflow-cpu==2.19.*"
+    pip_in_env install -e "${REPO_ROOT}[unet]"
 fi
-
-# Install torch from the matched index first so its CUDA-specific wheels are
-# already in place before the editable install runs.
-if [ -n "${TORCH_INDEX}" ]; then
-    "${PIP}" install --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" torch torchvision
-fi
-
-"${PIP}" install -e "${REPO_ROOT}[unet]" "${TF_PIN}" ${TF_EXTRA:+${TF_EXTRA}}
 
 if [ ! -f "${REPO_ROOT}/.env.local" ] && [ -f "${REPO_ROOT}/.env.example" ]; then
     cp "${REPO_ROOT}/.env.example" "${REPO_ROOT}/.env.local"
     echo "[setup] created .env.local from .env.example — set HF_TOKEN before running"
 fi
 
-ACTIVATE="${VENV_DIR}/bin/activate"
-# Remove any previous (possibly broken) patch so re-runs always get the current version.
-if grep -q "impact_team_2: nvidia wheel libs" "${ACTIVATE}" 2>/dev/null; then
-    # Strip from the marker line to EOF.
-    sed -i '/# impact_team_2: nvidia wheel libs/,$d' "${ACTIVATE}"
+# Install an activate.d hook that adds the pip-installed NVIDIA wheel libs to
+# LD_LIBRARY_PATH and points XLA at libdevice.10.bc.
+CONDA_PREFIX_DIR="$(conda run --name "${ENV_NAME}" printenv CONDA_PREFIX 2>/dev/null || true)"
+if [ -n "${CONDA_PREFIX_DIR}" ] && [ -d "${CONDA_PREFIX_DIR}" ]; then
+    mkdir -p "${CONDA_PREFIX_DIR}/etc/conda/activate.d" "${CONDA_PREFIX_DIR}/etc/conda/deactivate.d"
+    cat > "${CONDA_PREFIX_DIR}/etc/conda/activate.d/impact_team_2.sh" <<'ACT'
+# impact_team_2: add pip-installed NVIDIA wheel libs (cuDNN/cuBLAS/NCCL) to the
+# loader path, and point XLA at libdevice.10.bc from nvidia-cuda-nvcc-cu12.
+export _IT2_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+export _IT2_OLD_XLA_FLAGS="${XLA_FLAGS:-}"
+_IT2_LIBS=""
+for _d in "${CONDA_PREFIX}"/lib/python*/site-packages/nvidia/*/lib; do
+    [ -d "${_d}" ] && _IT2_LIBS="${_IT2_LIBS:+${_IT2_LIBS}:}${_d}"
+done
+if [ -n "${_IT2_LIBS}" ]; then
+    export LD_LIBRARY_PATH="${_IT2_LIBS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
-cat >> "${ACTIVATE}" <<'ACT'
-
-# impact_team_2: nvidia wheel libs -- add cuDNN/cuBLAS/NCCL from pip wheels to
-# loader path, and point XLA at libdevice.10.bc from the nvidia-cuda-nvcc-cu12
-# wheel so TF/UNet training works on GPU.
-_IT2_VENV="${VIRTUAL_ENV:-}"
-if [ -n "${_IT2_VENV}" ]; then
-    _IT2_LIBS=""
-    for _d in "${_IT2_VENV}"/lib/python*/site-packages/nvidia/*/lib; do
-        [ -d "${_d}" ] && _IT2_LIBS="${_IT2_LIBS:+${_IT2_LIBS}:}${_d}"
-    done
-    if [ -n "${_IT2_LIBS}" ]; then
-        export LD_LIBRARY_PATH="${_IT2_LIBS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-    fi
-    for _d in "${_IT2_VENV}"/lib/python*/site-packages/nvidia/cuda_nvcc; do
-        [ -d "${_d}" ] && export XLA_FLAGS="--xla_gpu_cuda_data_dir=${_d}"
-    done
-    unset _IT2_LIBS _d
-fi
-unset _IT2_VENV
+for _d in "${CONDA_PREFIX}"/lib/python*/site-packages/nvidia/cuda_nvcc; do
+    [ -d "${_d}" ] && export XLA_FLAGS="--xla_gpu_cuda_data_dir=${_d}"
+done
+unset _IT2_LIBS _d
 ACT
-echo "[setup] patched venv activate script to add NVIDIA wheel libs to LD_LIBRARY_PATH"
+    cat > "${CONDA_PREFIX_DIR}/etc/conda/deactivate.d/impact_team_2.sh" <<'DEA'
+if [ -n "${_IT2_OLD_LD_LIBRARY_PATH+x}" ]; then
+    export LD_LIBRARY_PATH="${_IT2_OLD_LD_LIBRARY_PATH}"
+    unset _IT2_OLD_LD_LIBRARY_PATH
+fi
+if [ -n "${_IT2_OLD_XLA_FLAGS+x}" ]; then
+    if [ -z "${_IT2_OLD_XLA_FLAGS}" ]; then
+        unset XLA_FLAGS
+    else
+        export XLA_FLAGS="${_IT2_OLD_XLA_FLAGS}"
+    fi
+    unset _IT2_OLD_XLA_FLAGS
+fi
+DEA
+    echo "[setup] installed activate.d/deactivate.d hooks for NVIDIA wheel libs + XLA_FLAGS"
+fi
 
-source "${ACTIVATE}"
+# CUDA / TF availability check — non-fatal.
+conda run --no-capture-output --name "${ENV_NAME}" python - <<'PY'
+import os
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-# CUDA availability check — non-fatal, just a heads up.
-"${VENV_DIR}/bin/python" - <<'PY'
 import torch
 if torch.cuda.is_available():
     n = torch.cuda.device_count()
@@ -115,8 +160,6 @@ else:
     print("[setup] torch CUDA: NOT available — training will be unusably slow on CPU")
 
 try:
-    import os
-    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
     import tensorflow as tf
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
@@ -130,7 +173,8 @@ except Exception as e:
 PY
 
 if (return 0 2>/dev/null); then
-    echo "[setup] venv activated"
+    conda activate "${ENV_NAME}"
+    echo "[setup] conda env '${ENV_NAME}' activated"
 else
-    echo "[setup] done. Activate with: source ${VENV_DIR}/bin/activate"
+    echo "[setup] done. Activate with: conda activate ${ENV_NAME}"
 fi
