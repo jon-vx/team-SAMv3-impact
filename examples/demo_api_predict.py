@@ -17,7 +17,7 @@ images, masks = load_spleen_data()
 image, gt = images[0], masks[0]
 
 for model in ("SAM", "MedSAM"):
-    pred = I.predict(image, prompt="spleen", model=model, mode="not_finetuned")
+    pred = I.predict(image, prompt="spleen", model=model, mode="not_finetuned", sam_use_unet=True)
     d = dice_score(pred, gt) if pred is not None else 0.0
     save_overlay(
         image, gt, pred,

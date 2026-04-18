@@ -216,16 +216,14 @@ spotting failure patterns across the whole val split at a glance.
 
 ## Examples
 
-| Script                           | What it does                                                                                                            |
-|----------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `examples/demo_api_predict.py`   | Single-image `I.predict` showcase: run both models on one image, write 4-panel overlays.                                |
-| `examples/demo_medsam3_inf.py`   | `I.evaluate` baseline MedSAM3 over the spleen val split; saves worst-5 overlays.                                        |
-| `examples/demo_medsam3_train.py` | Download the public ultrasound spleen dataset and fine-tune MedSAM3 on it.                                              |
-| `examples/demo_medsam3_eval.py`  | `I.evaluate` baseline vs fine-tuned MedSAM3, plus loss curves and worst-case grid.                                      |
-| `examples/demo_sam3_train.py`    | Fine-tune SAM3 on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                       |
-| `examples/demo_sam3_inf.py`      | `I.evaluate` baseline SAM3 over the spleen val split (text-only prompting by default).                                  |
-| `examples/demo_sam3_unet_cascade.py` | SAM3 baseline (text-only) → train UNet++ bbox generator → SAM3 with UNet cascade, side-by-side summary. |
-| `examples/demo_api.py`           | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.                 |
+| Script                               | What it does                                                                                                            |
+|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `examples/demo_api_predict.py`       | Single-image `I.predict` showcase: run both models on one image, write 4-panel overlays.                                |
+| `examples/demo_medsam3_train.py`     | Download the public ultrasound spleen dataset and fine-tune MedSAM3 on it.                                              |
+| `examples/demo_medsam3_eval.py`      | `I.evaluate` baseline vs fine-tuned MedSAM3, plus loss curves and worst-case grid.                                      |
+| `examples/demo_sam3_train.py`        | Fine-tune SAM3 on the spleen dataset end-to-end. Writes to `runs/sam3_finetune/`.                                       |
+| `examples/demo_sam3_unet_cascade.py` | SAM3 baseline (text-only) → train UNet++ bbox generator → SAM3 with UNet cascade, side-by-side summary.                 |
+| `examples/demo_api.py`               | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.                 |
 
 ```bash
 # Single-image predict (quickest smoke test)
@@ -242,8 +240,6 @@ venv/bin/python examples/demo_sam3_train.py --box-source unet \
     --unet checkpoints/best_unetp.weights.h5                         # detect-then-segment
 venv/bin/python examples/demo_sam3_train.py --box-source gt          # GT-box upper bound
 venv/bin/python examples/demo_sam3_train.py --n 32 --epochs 2        # quick sanity run
-
-venv/bin/python examples/demo_sam3_inf.py                            # text-only baseline eval
 
 # Unified API end-to-end
 venv/bin/python examples/demo_api.py
