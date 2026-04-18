@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Optional, Sequence
+from typing import Callable, Iterable, Mapping, Optional
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -12,68 +12,10 @@ from matplotlib.figure import Figure
 from PIL import Image as PILImage
 from tqdm import tqdm
 
+from impact_team_2.visual.utils import best_mask, dice_score, resize_mask, summarize_dice
+
 
 PredictFn = Callable[..., dict]
-
-
-# ---------------------------------------------------------------------------
-# Pure helpers
-# ---------------------------------------------------------------------------
-
-def dice_score(pred_mask: np.ndarray, gt_mask: np.ndarray) -> float:
-    """Binary dice coefficient. Operates on bool / 0-1 arrays of the same shape."""
-    pred_mask = pred_mask.astype(bool)
-    gt_mask = gt_mask.astype(bool)
-    intersection = np.logical_and(pred_mask, gt_mask).sum()
-    denom = pred_mask.sum() + gt_mask.sum()
-    if denom == 0:
-        return 0.0
-    return float(2 * intersection / (denom + 1e-8))
-
-
-def _resize_mask_to(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
-    if mask.shape == shape:
-        return mask
-    return np.array(
-        PILImage.fromarray(mask.astype(np.uint8)).resize(
-            (shape[1], shape[0]), PILImage.NEAREST
-        ),
-        dtype=bool,
-    )
-
-
-def _best_pred_mask(result: dict) -> Optional[np.ndarray]:
-    if result.get("masks") is None or result.get("scores") is None:
-        return None
-    return result["masks"][int(result["scores"].argmax())]
-
-
-# ---------------------------------------------------------------------------
-# Aggregate summary
-# ---------------------------------------------------------------------------
-
-def summarize_dice(
-    dice_scores: Sequence[float],
-    scores: Optional[Sequence[float]] = None,
-) -> dict:
-    """Return the same numbers the MedSAM3 notebook prints, as a dict.
-
-    `scores` is the flat list of every per-detection confidence score across
-    all evaluated images, used to populate the score range / mean fields.
-    """
-    out: dict = {
-        "n": len(dice_scores),
-        "mean_dice": float(np.mean(dice_scores)) if dice_scores else 0.0,
-        "max_dice": float(np.max(dice_scores)) if dice_scores else 0.0,
-        "min_dice": float(np.min(dice_scores)) if dice_scores else 0.0,
-        "dice_gt_0.5": int(sum(1 for d in dice_scores if d > 0.5)),
-        "dice_gt_0.3": int(sum(1 for d in dice_scores if d > 0.3)),
-    }
-    if scores is not None and len(scores) > 0:
-        out["score_min"] = float(np.min(scores))
-        out["score_max"] = float(np.max(scores))
-        out["score_mean"] = float(np.mean(scores))
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -123,14 +65,14 @@ def plot_prediction_grid(
         axes[row, 1].axis("off")
 
         axes[row, 2].imshow(result["image"])
-        pred_mask = _best_pred_mask(result)
+        pred_mask = best_mask(result)
         if pred_mask is not None:
-            gt_for_dice = _resize_mask_to(gt, pred_mask.shape)
+            gt_for_dice = resize_mask(gt, pred_mask.shape)
             d = dice_score(pred_mask, gt_for_dice)
             dice_scores.append(d)
 
             pred_overlay = np.zeros((*pred_mask.shape, 4))
-            pred_overlay[pred_mask.astype(bool)] = [1, 0, 0, 0.4]
+            pred_overlay[pred_mask] = [1, 0, 0, 0.4]
             axes[row, 2].imshow(pred_overlay)
             top_score = float(result["scores"].max())
             axes[row, 2].set_title(
@@ -297,11 +239,11 @@ def evaluate(
     dice_scores: list[float] = []
     for idx in indices:
         result = results[idx]
-        pred_mask = _best_pred_mask(result)
+        pred_mask = best_mask(result)
         if pred_mask is None:
             dice_scores.append(0.0)
             continue
-        gt = _resize_mask_to(masks[idx].astype(bool), pred_mask.shape)
+        gt = resize_mask(masks[idx].astype(bool), pred_mask.shape)
         dice_scores.append(dice_score(pred_mask, gt))
 
     return {

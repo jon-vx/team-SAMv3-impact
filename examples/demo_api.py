@@ -1,0 +1,175 @@
+"""End-to-end `impact_team_2` API showcase.
+
+Flow:
+  1. Evaluate vanilla SAM3 + base MedSAM3 on the held-out val split.
+  2. Fine-tune both models on the train split.
+  3. Evaluate the fine-tuned SAM3 + MedSAM3 on the same val split.
+  4. Compare every (model, mode) summary side by side.
+
+Held-out discipline is the caller's job: we split train/val with a fixed seed
+and only ever train on `train_idx`, only ever evaluate on `val_idx`.
+
+Each eval also writes the 5 worst-dice 4-panel overlays per (model, mode) to
+`runs/api_overlays/<model>_<mode>/` so baseline vs. fine-tuned regressions
+are visible at a glance.
+"""
+
+from pathlib import Path
+
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+from _data import load_spleen_data
+
+import impact_team_2 as I  # noqa: E402
+from impact_team_2.train import train_medsam3
+from impact_team_2.train.sam import train_sam
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RUNS = REPO_ROOT / "runs"
+SAM_DIR = RUNS / "sam3_finetune"
+MEDSAM_DIR = RUNS / "medsam3_finetune"
+OVERLAY_DIR = RUNS / "api_overlays"
+COMPARISON_DIR = RUNS / "api_comparisons"
+CONTACT_DIR = RUNS / "api_contact_sheets"
+PROMPT = "spleen"
+
+
+# --- 0. data ----------------------------------------------------------------
+images, masks = load_spleen_data()
+print(f"images: {images.shape} | masks: {masks.shape}")
+
+train_idx, val_idx = train_test_split(
+    range(images.shape[0]), test_size=0.2, random_state=42
+)
+val_images, val_masks = images[val_idx], masks[val_idx]
+train_images, train_masks = images[train_idx], masks[train_idx]
+
+all_summaries: dict[str, dict] = {}
+
+
+# --- 1. baseline: vanilla SAM3 + base MedSAM3 on val ------------------------
+print("\n### 1. Evaluating vanilla SAM3 and base MedSAM3 on val split ###")
+baseline = I.evaluate(
+    model_list=["SAM", "MedSAM"],
+    images=val_images,
+    ground_truth=val_masks,
+    modes=["not_finetuned"],
+    prompt=PROMPT,
+    threshold={"SAM": 0.01, "MedSAM": 0.5},
+    save_overlays_dir=OVERLAY_DIR,
+    save_overlays_n="all",
+    sam_use_unet=False,
+)
+for key, res in baseline.items():
+    all_summaries[key] = res["summary"]
+
+I.clear_cache()
+
+
+# --- 2. fine-tune MedSAM3 on train ------------------------------------------
+print("\n### 2a. Fine-tuning MedSAM3 on train split ###")
+medsam_ckpt = train_medsam3(
+    images=train_images,
+    masks=train_masks,
+    output_dir=MEDSAM_DIR,
+    category=PROMPT,
+)
+print(f"MedSAM3 LoRA weights -> {medsam_ckpt}")
+I.clear_cache()
+
+
+# --- 3. fine-tune SAM3 on train ---------------------------------------------
+print("\n### 2b. Fine-tuning SAM3 on train split ###")
+sam_ckpt = train_sam(
+    train_images,
+    train_masks,
+    output_dir=SAM_DIR,
+    val_split=0.1,
+    epochs=10,
+)
+print(f"SAM3 finetuned weights -> {sam_ckpt}")
+I.clear_cache()
+
+
+# --- 4. evaluate fine-tuned SAM3 + MedSAM3 on val ---------------------------
+print("\n### 3. Evaluating fine-tuned SAM3 and MedSAM3 on val split ###")
+finetuned = I.evaluate(
+    model_list=["SAM", "MedSAM"],
+    images=val_images,
+    ground_truth=val_masks,
+    modes=["finetuned"],
+    prompt=PROMPT,
+    threshold={"SAM": 0.01, "MedSAM": 0.5},
+    save_overlays_dir=OVERLAY_DIR,
+    save_overlays_n="all",
+    sam_use_unet=False,
+)
+for key, res in finetuned.items():
+    all_summaries[key] = res["summary"]
+
+I.clear_cache()
+
+
+# --- 5. compare -------------------------------------------------------------
+print("\n### 4. Comparison ###")
+metric_keys = ("n", "mean_dice", "max_dice", "min_dice", "dice_gt_0.5", "dice_gt_0.3")
+col_w = max(len(k) for k in all_summaries) + 4
+header = f"{'metric':<14}" + "".join(f"{k:>{col_w}}" for k in all_summaries)
+print(header)
+print("-" * len(header))
+for m in metric_keys:
+    row = f"{m:<14}"
+    for key in all_summaries:
+        v = all_summaries[key].get(m, "-")
+        row += f"{v:>{col_w}.4f}" if isinstance(v, float) else f"{str(v):>{col_w}}"
+    print(row)
+
+# Deltas: finetuned - not_finetuned, per model
+print("\nDelta (finetuned - not_finetuned):")
+for model in ("SAM", "MedSAM"):
+    b = all_summaries.get(f"{model}/not_finetuned")
+    f = all_summaries.get(f"{model}/finetuned")
+    if not (b and f):
+        continue
+    print(f"  {model}:")
+    for m in ("mean_dice", "max_dice", "min_dice", "dice_gt_0.5", "dice_gt_0.3"):
+        print(f"    {m}: {f[m] - b[m]:+.4f}")
+
+
+# --- 6. per-image comparison + contact sheets -----------------------------
+from impact_team_2.visual import best_mask, save_comparison_overlay, save_contact_sheet
+
+
+models = ("SAM", "MedSAM")
+n_val = len(val_images)
+
+print(f"\n### 5. Writing per-image comparisons -> {COMPARISON_DIR.name}/ ({n_val} files)")
+for i in range(n_val):
+    baseline_preds = {m: best_mask(baseline[f"{m}/not_finetuned"]["results"][i]) for m in models}
+    finetuned_preds = {m: best_mask(finetuned[f"{m}/finetuned"]["results"][i]) for m in models}
+    baseline_dice_i = {m: baseline[f"{m}/not_finetuned"]["dice"][i] for m in models}
+    finetuned_dice_i = {m: finetuned[f"{m}/finetuned"]["dice"][i] for m in models}
+    save_comparison_overlay(
+        val_images[i], val_masks[i],
+        baseline_preds, finetuned_preds,
+        COMPARISON_DIR / f"val_{i:03d}.png",
+        baseline_dice=baseline_dice_i,
+        finetuned_dice=finetuned_dice_i,
+        title=f"val[{i}]  —  baseline (top) vs finetuned (bottom)",
+    )
+
+print(f"\n### 6. Writing contact sheets -> {CONTACT_DIR.name}/ (4 files)")
+for phase_dict, suffix in ((baseline, "not_finetuned"), (finetuned, "finetuned")):
+    for model in models:
+        key = f"{model}/{suffix}"
+        res = phase_dict[key]
+        preds = [best_mask(res["results"][i]) for i in range(n_val)]
+        save_contact_sheet(
+            images=list(val_images),
+            gt_masks=list(val_masks),
+            pred_masks=preds,
+            out_path=CONTACT_DIR / f"{key.replace('/', '_')}.png",
+            dice_scores=res["dice"],
+            title=f"{key}  —  {n_val} val images",
+        )

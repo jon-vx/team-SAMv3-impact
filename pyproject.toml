@@ -10,19 +10,35 @@ requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.8.4",
     "evaluate>=0.4.6",
-    "torch>=2.11.0",
-    "transformers>=5.5.0",
-    "torchmetrics>=1.9.0",
+    # Pinned to torch 2.7.x: MedSAM3 requires >=2.7, and 2.8+ starts pulling
+    # in partial cu13 NVIDIA wheels that conflict with our cu12 stack.
+    "torch>=2.7,<2.8",
+    "transformers>=5.0,<6",
+    "torchmetrics>=1.5",
     "python-dotenv>=1.0.0",
-    "torchvision>=0.26.0",
-    "tensorboard>=2.20.0",
-    "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git",
+    "torchvision>=0.22,<0.23",
+    "tensorboard",
+    # Pinned to a specific commit so upstream changes (e.g. torch version bumps)
+    # can't silently break our install. Bump this SHA to pick up new MedSAM3 work.
+    "sam3-lora @ git+https://github.com/Joey-S-Liu/MedSAM3.git@f79eef3f4ccf",
     "einops",
     "pycocotools",
     "psutil",
     "scikit-learn",
     "matplotlib",
     "pyyaml"
+]
+
+[project.optional-dependencies]
+# Vendor UNet bbox generator (INIA) — only needed for the SAM3 auto-bbox path
+# (examples/demo_unet_train.py and api.predict with sam_use_unet=True).
+# tensorflow-metal is Apple-Silicon only; install it manually if you need it.
+unet = [
+    "tensorflow",
+    "keras-unet-collection",
+    # Ships libdevice.10.bc that TF/XLA needs for UNet training on GPU.
+    # Linux-only; on macOS TF uses Metal and doesn't need it.
+    "nvidia-cuda-nvcc-cu12; platform_system == 'Linux'",
 ]
 
 [project.scripts]
