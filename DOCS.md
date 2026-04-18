@@ -26,16 +26,18 @@ unusably slow).
 ```bash
 git clone https://github.com/jon-vx/team-SAMv3-impact.git
 cd team-SAMv3-impact
-./setup.sh                 # or: source setup.sh  to activate venv in current shell
+./setup.sh                 # or: source setup.sh  to activate the env in current shell
 ```
 
-`setup.sh` creates `venv/`, detects your CUDA version via `nvidia-smi`,
-installs the matching PyTorch wheel (cu126 for CUDA 12.x, cu118 for older
-drivers, CPU fallback otherwise), and installs the project in editable mode
-including the `[unet]` extra (TensorFlow + keras-unet-collection). It also
-patches `venv/bin/activate` so NVIDIA wheel libs land on `LD_LIBRARY_PATH`
-and XLA can find `libdevice.10.bc` — without this, TF/UNet training crashes
-on GPU.
+`setup.sh` creates (or updates) the `impact-team-2` conda env. On Linux +
+NVIDIA with a CUDA 12.x driver it uses `environment.yml` (torch 2.7.x on the
+cu126 wheel index + TF 2.19, the cuDNN 9 stack that keeps torch and TF from
+colliding on plugin registration). Older drivers, Apple Silicon, and CPU-only
+boxes branch to the matching torch/TF variants. The `[unet]` extra pulls in
+TensorFlow, keras-unet-collection, and `nvidia-cuda-nvcc-cu12`. `setup.sh`
+also installs `activate.d` / `deactivate.d` hooks in the env that add the
+pip-installed NVIDIA wheel libs to `LD_LIBRARY_PATH` and point `XLA_FLAGS` at
+`libdevice.10.bc` — without this, TF/UNet training crashes on GPU.
 
 ### HuggingFace token
 
@@ -51,12 +53,13 @@ Without it, the first predictor build will fail on the model download.
 ### Verifying the install
 
 ```bash
-venv/bin/python -c "import impact_team_2 as I; print('OK')"
+conda activate impact-team-2
+python -c "import impact_team_2 as I; print('OK')"
 ```
 
-For a full smoke test, run `venv/bin/python examples/demo_api_predict.py` —
-it downloads the spleen dataset, runs one inference per model, and writes
-two PNGs under `runs/predict_demo/`.
+For a full smoke test, run `python examples/demo_api_predict.py` — it
+downloads the spleen dataset, runs one inference per model, and writes two
+PNGs under `runs/predict_demo/`.
 
 ---
 
@@ -350,19 +353,21 @@ them in sequence downloads the dataset once.
 | `demo_api.py`                        | End-to-end showcase: baseline eval → finetune both models → evaluate → comparison table + per-image grids + contact sheets. Reference for how the API is meant to be used. |
 
 ```bash
+conda activate impact-team-2
+
 # Quickest smoke test
-venv/bin/python examples/demo_api_predict.py
+python examples/demo_api_predict.py
 
 # Full MedSAM3 flow
-venv/bin/python examples/demo_medsam3_train.py
-venv/bin/python examples/demo_medsam3_eval.py
+python examples/demo_medsam3_train.py
+python examples/demo_medsam3_eval.py
 
 # Full SAM3 flow with UNet cascade
-venv/bin/python examples/demo_sam3_unet_cascade.py          # also trains the UNet
-venv/bin/python examples/demo_sam3_train.py --box-source unet --unet checkpoints/best_unetp.weights.h5
+python examples/demo_sam3_unet_cascade.py          # also trains the UNet
+python examples/demo_sam3_train.py --box-source unet --unet checkpoints/best_unetp.weights.h5
 
 # Unified end-to-end
-venv/bin/python examples/demo_api.py
+python examples/demo_api.py
 ```
 
 ---
@@ -465,9 +470,9 @@ those env vars set explicitly.
 
 ### "UNet training blows up with libdevice errors"
 
-`setup.sh` patches `venv/bin/activate` to set `XLA_FLAGS=--xla_gpu_cuda_data_dir=...`
-pointing at the `nvidia-cuda-nvcc-cu12` wheel. If you set up the venv by
-hand, replicate that or reinstall via `setup.sh`.
+`setup.sh` installs a conda `activate.d` hook that sets
+`XLA_FLAGS=--xla_gpu_cuda_data_dir=...` pointing at the `nvidia-cuda-nvcc-cu12`
+wheel. If you built the env by hand, replicate that or rerun `setup.sh`.
 
 ### "Finetuned checkpoint not found"
 

@@ -7,16 +7,12 @@ fine-tuning + evaluation workflows for both are covered below.
 
 ## Setup
 
+
 ```bash
 git clone https://github.com/jon-vx/team-SAMv3-impact.git
 cd team-SAMv3-impact
-./setup.sh        # or: source setup.sh   to also activate the venv in this shell
+./setup.sh        # or: source setup.sh   to also activate the env in this shell
 ```
-
-`setup.sh` creates `venv/`, detects your CUDA driver via `nvidia-smi` and installs the
-matching PyTorch wheel (cu118 for older drivers, cu126 for CUDA 12.x, CPU fallback
-otherwise), installs the project in editable mode, and reports whether CUDA is visible
-to torch after the install.
 
 A Hugging Face token is required at runtime. `impact_team_2` auto-loads `.env.local`
 on import, and `huggingface_hub` / `transformers` pick up `HF_TOKEN` from the
@@ -226,23 +222,25 @@ spotting failure patterns across the whole val split at a glance.
 | `examples/demo_api.py`               | End-to-end unified-API demo: baseline eval → fine-tune SAM3 + MedSAM3 → eval → side-by-side comparison.                 |
 
 ```bash
+conda activate impact-team-2
+
 # Single-image predict (quickest smoke test)
-venv/bin/python examples/demo_api_predict.py
+python examples/demo_api_predict.py
 
 # MedSAM3 flow
-venv/bin/python examples/demo_medsam3_train.py    # train (writes runs/medsam3_finetune/)
-venv/bin/python examples/demo_medsam3_eval.py     # plot before/after
+python examples/demo_medsam3_train.py    # train (writes runs/medsam3_finetune/)
+python examples/demo_medsam3_eval.py     # plot before/after
 
 # SAM3 flow
-venv/bin/python examples/demo_sam3_unet_cascade.py                   # text-only → train UNet → SAM3+UNet cascade
-venv/bin/python examples/demo_sam3_train.py                          # text-only, 10 epochs (default)
-venv/bin/python examples/demo_sam3_train.py --box-source unet \
-    --unet checkpoints/best_unetp.weights.h5                         # detect-then-segment
-venv/bin/python examples/demo_sam3_train.py --box-source gt          # GT-box upper bound
-venv/bin/python examples/demo_sam3_train.py --n 32 --epochs 2        # quick sanity run
+python examples/demo_sam3_unet_cascade.py                   # text-only → train UNet → SAM3+UNet cascade
+python examples/demo_sam3_train.py                          # text-only, 10 epochs (default)
+python examples/demo_sam3_train.py --box-source unet \
+    --unet checkpoints/best_unetp.weights.h5                # detect-then-segment
+python examples/demo_sam3_train.py --box-source gt          # GT-box upper bound
+python examples/demo_sam3_train.py --n 32 --epochs 2        # quick sanity run
 
 # Unified API end-to-end
-venv/bin/python examples/demo_api.py
+python examples/demo_api.py
 ```
 
 
@@ -254,7 +252,8 @@ venv/bin/python examples/demo_api.py
 ├── datasets/                      # training/eval data (gitignored)
 ├── runs/                          # training output: configs, COCO dataset, LoRA/SAM3 checkpoints, tb/
 ├── examples/                      # runnable example scripts
-├── setup.sh                       # venv + CUDA-aware torch install
+├── environment.yml                # conda env spec (Linux + cu126 + TF 2.19)
+├── setup.sh                       # conda env create/update + CUDA-aware torch/TF install
 └── src/impact_team_2/
     ├── api.py                     # unified predict / evaluate API
     ├── inference/

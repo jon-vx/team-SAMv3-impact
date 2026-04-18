@@ -1,6 +1,5 @@
 # local python dev artifacts
 **/__pycache__
-**/*.venv
 **/*.local
 
 # tensorboard charting of training metrics
@@ -17,8 +16,6 @@ datasets/*.npz
 # model checkpoints used for testing
 checkpoints/**/*.safetensors
 checkpoints/*.safetensors
-
-/venv
 
 # local planning notes
 /todo.md
