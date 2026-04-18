@@ -65,7 +65,13 @@ if [ "${OS_NAME}" = "Darwin" ] && [ "${ARCH_NAME}" = "arm64" ]; then
     pip_in_env install --upgrade pip
     pip_in_env install "torch>=2.7,<2.8" "torchvision>=0.22,<0.23"
     pip_in_env install "tensorflow-macos==2.16.*" "tensorflow-metal"
-    pip_in_env install -e "${REPO_ROOT}[unet]"
+    # decord has no PyPI arm64 wheel; install from conda-forge before the
+    # editable install so pip doesn't abort on a missing distribution.
+    conda install --yes --name "${ENV_NAME}" -c conda-forge decord
+    # Pin tensorflow to 2.16.x in the same resolver pass so that sam3-lora's
+    # transitive deps cannot upgrade it and break tensorflow-metal (whose dylib
+    # is version-locked to 2.16.x on Apple Silicon).
+    pip_in_env install -e "${REPO_ROOT}[unet]" "tensorflow==2.16.*" "tensorflow-macos==2.16.*"
 elif command -v nvidia-smi >/dev/null 2>&1; then
     # NVIDIA drivers are forward-compatible across CUDA minors; the working
     # stack is cu126 for all 12.x drivers, cu118 for older drivers.
@@ -118,6 +124,11 @@ if [ -n "${CONDA_PREFIX_DIR}" ] && [ -d "${CONDA_PREFIX_DIR}" ]; then
 export _IT2_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export _IT2_OLD_XLA_FLAGS="${XLA_FLAGS:-}"
 _IT2_LIBS=""
+# Enable nullglob so unmatched globs silently expand to nothing in both bash
+# and zsh (nvidia dirs are absent on macOS / CPU-only installs; zsh errors on
+# unmatched globs by default which breaks `source setup.sh` with set -e).
+{ shopt -s nullglob 2>/dev/null || true; }
+{ setopt nullglob 2>/dev/null || true; }
 for _d in "${CONDA_PREFIX}"/lib/python*/site-packages/nvidia/*/lib; do
     [ -d "${_d}" ] && _IT2_LIBS="${_IT2_LIBS:+${_IT2_LIBS}:}${_d}"
 done
@@ -127,6 +138,8 @@ fi
 for _d in "${CONDA_PREFIX}"/lib/python*/site-packages/nvidia/cuda_nvcc; do
     [ -d "${_d}" ] && export XLA_FLAGS="--xla_gpu_cuda_data_dir=${_d}"
 done
+{ shopt -u nullglob 2>/dev/null || true; }
+{ unsetopt nullglob 2>/dev/null || true; }
 unset _IT2_LIBS _d
 ACT
     cat > "${CONDA_PREFIX_DIR}/etc/conda/deactivate.d/impact_team_2.sh" <<'DEA'

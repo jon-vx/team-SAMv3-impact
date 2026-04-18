@@ -2,10 +2,13 @@
 
 Three phases, all on the same held-out val split:
     1. Baseline SAM3 with text-only prompting (`sam_use_unet=False`).
-    2. Train UNet++ on the train split and save
-       `checkpoints/best_unetp.weights.h5`.
-    3. Re-evaluate SAM3 with the UNet cascade active (`sam_use_unet=True`)
-       so it picks up the freshly-written checkpoint.
+    2. Load or train the UNet++ bbox generator:
+         - If `checkpoints/best_unetp.weights.h5` already exists it is loaded
+           directly, skipping the training run entirely.
+         - Otherwise UNet++ is trained on the outer train split only (to avoid
+           leaking val frames) and the weights are saved to that path so future
+           runs hit the fast path.
+    3. Re-evaluate SAM3 with the UNet cascade active (`sam_use_unet=True`).
 
 Prints the two summaries side by side with deltas, so the contribution of
 the UNet bbox stage is legible.
@@ -18,6 +21,9 @@ import os
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
 os.environ.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+# Allow PyTorch MPS (Apple Silicon) to allocate beyond the default 60 % cap so
+# large model weights don't spill to CPU.
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 
 from pathlib import Path
 
@@ -27,6 +33,7 @@ from _data import load_spleen_data
 
 import impact_team_2 as I
 from impact_team_2.vendor.team_one.INIA import fit, preprocess
+from impact_team_2.inference._inference_sam3 import load_unet_weights
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CKPT_DIR = REPO_ROOT / "checkpoints"
@@ -58,19 +65,18 @@ text_only = I.evaluate(
 I.clear_cache()
 
 
-# --- 2. train UNet++ bbox generator on the OUTER train split --------------
-# `INIA.load_data` would shuffle + split the full dataset on its own (different
-# seed/ratio than our 80/20), which would leak val frames into UNet training.
-# Instead, replicate the load_data pipeline (crop top-24 equipment band → pad
-# to 320x320 via preprocess) on the outer train slice only, so the 42-image
-# outer val set stays unseen by everything.
-print("\n### 2. Training UNet++ bbox generator (train split only)")
-X_train, y_train = preprocess(train_images[:, 24:], train_masks[:, 24:])
-print(f"unet train: {X_train.shape}")
-unet_model, _ = fit("unet++", X_train, y_train)
-CKPT_DIR.mkdir(exist_ok=True)
-unet_model.save_weights(str(WEIGHTS_PATH))
-print(f"UNet++ weights saved -> {WEIGHTS_PATH}")
+# --- 2. load or train UNet++ bbox generator --------------------------------
+if WEIGHTS_PATH.exists():
+    print(f"\n### 2. Loading existing UNet++ weights from {WEIGHTS_PATH}")
+    unet_model = load_unet_weights(WEIGHTS_PATH)
+else:
+    print("\n### 2. Training UNet++ bbox generator (train split only)")
+    X_train, y_train = preprocess(train_images[:, 24:], train_masks[:, 24:])
+    print(f"unet train: {X_train.shape}")
+    unet_model, _ = fit("unet++", X_train, y_train)
+    CKPT_DIR.mkdir(exist_ok=True)
+    unet_model.save_weights(str(WEIGHTS_PATH))
+    print(f"UNet++ weights saved -> {WEIGHTS_PATH}")
 
 
 # --- 3. SAM3 with UNet cascade --------------------------------------------
