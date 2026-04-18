@@ -14,10 +14,10 @@ from impact_team_2.visual import dice_score, save_overlay
 OUT_DIR = Path("runs/predict_demo")
 
 images, masks = load_spleen_data()
-image, gt = images[0], masks[0]
+image, gt = images[4], masks[4]
 
 for model in ("SAM", "MedSAM"):
-    pred = I.predict(image, prompt="spleen", model=model, mode="not_finetuned", sam_use_unet=True)
+    pred = I.predict(image, prompt="spleen", model=model, mode="not_finetuned", threshold=0.2, sam_use_unet=False)
     d = dice_score(pred, gt) if pred is not None else 0.0
     save_overlay(
         image, gt, pred,
