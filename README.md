@@ -12,6 +12,7 @@ fine-tuning + evaluation workflows for both are covered below.
 git clone https://github.com/jon-vx/team-SAMv3-impact.git
 cd team-SAMv3-impact
 ./setup.sh        # or: source setup.sh   to also activate the env in this shell
+conda activate impact-team-2 # if using conda environment
 ```
 
 A Hugging Face token is required at runtime. `impact_team_2` auto-loads `.env.local`
