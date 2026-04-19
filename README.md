@@ -11,8 +11,7 @@ fine-tuning + evaluation workflows for both are covered below.
 ```bash
 git clone https://github.com/jon-vx/team-SAMv3-impact.git
 cd team-SAMv3-impact
-./setup.sh        # or: source setup.sh   to also activate the env in this shell
-conda activate impact-team-2 # if using conda environment
+source setup.sh # with conda in (base)
 ```
 
 A Hugging Face token is required at runtime. `impact_team_2` auto-loads `.env.local`
@@ -166,6 +165,9 @@ goes to the canonical filename; the most recent epoch lands in
 `last_sam3_finetuned_weights.safetensors` as a backup.
 
 ## Visualization
+
+<img width="1083" height="760" alt="image" src="https://github.com/user-attachments/assets/4dbd23a6-49ee-4542-8c14-fb64e1ad2dd3" />
+
 
 ```python
 from impact_team_2.inference import build_predictor
